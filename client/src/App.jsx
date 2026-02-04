@@ -7,7 +7,10 @@ import UserLogin from './pages/auth/UserLogin'
 import PartnerLogin from './pages/auth/PartnerLogin'
 import StoreLogin from './pages/auth/StoreLogin'
 import Footer from './components/Footer'
-
+import ClientTracking from './pages/tracking/ClientTracking'
+import PartnerTracking from './pages/tracking/PartnerTracking'
+import ClientDashboard from './pages/client/ClientDashboard'
+import PartnerDashboard from './pages/partner/PartnerDashboard'
 const App = () => {
   return (
     <div>
@@ -21,6 +24,10 @@ const App = () => {
           <Route path="/user-login" element={<UserLogin />} />
           <Route path="/partner-login" element={<PartnerLogin />} />
           <Route path="/store-login" element={<StoreLogin />} />
+          <Route path="/track-order" element={<ClientTracking />} />
+          <Route path="/partner-tracking" element={<PartnerTracking />} />
+          <Route path="/client-dashboard" element={<ClientDashboard />} />
+          <Route path="/partner-dashboard" element={<PartnerDashboard />} />
         </Routes>
       </div>
 
