@@ -67,3 +67,16 @@ export const loginStore = async (req, res) => {
     res.status(500).json({ message: error.message });
   }
 };
+
+// Get all stores
+export const getAllStores = async (req, res) => {
+  try {
+    const stores = await storeModel.find().select("_id storeName email phone city address");
+    res.status(200).json({
+      message: "Stores retrieved successfully",
+      stores,
+    });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};

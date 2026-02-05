@@ -1,10 +1,10 @@
 import itemModel from "../models/itemModel.js";
 import XLSX from "xlsx";
 
-// Add single item
+// Add single item with optional image and specifications
 export const addItem = async (req, res) => {
   try {
-    const { itemName, description, price, stock, category, sku } = req.body;
+    const { itemName, description, price, stock, category, sku, image, specifications } = req.body;
     const { storeId } = req.params;
 
     // validation
@@ -30,6 +30,8 @@ export const addItem = async (req, res) => {
       stock,
       category,
       sku,
+      image: image || "",
+      specifications: specifications || [],
     });
 
     await newItem.save();
@@ -57,11 +59,11 @@ export const getStoreItems = async (req, res) => {
   }
 };
 
-// Update item
+// Update item with optional image and specifications
 export const updateItem = async (req, res) => {
   try {
     const { itemId } = req.params;
-    const { itemName, description, price, stock, category, sku } = req.body;
+    const { itemName, description, price, stock, category, sku, image, specifications } = req.body;
 
     const item = await itemModel.findByIdAndUpdate(
       itemId,
@@ -72,6 +74,8 @@ export const updateItem = async (req, res) => {
         stock,
         category,
         sku,
+        image: image || "",
+        specifications: specifications || [],
       },
       { new: true }
     );
@@ -178,6 +182,20 @@ export const importItemsFromExcel = async (req, res) => {
         row.code ||
         row.Code ||
         null,
+      image:
+        row.Image ||
+        row.image ||
+        row.IMAGE ||
+        row["Product Image"] ||
+        row["Image URL"] ||
+        row.imageUrl ||
+        row["image url"] ||
+        "",
+      specifications:
+        (row.Specifications || row.specifications || row.Specs || "")
+          .split(",")
+          .map((spec) => spec.trim())
+          .filter((spec) => spec) || [],
     });
 
     // Process and deduplicate items
@@ -214,6 +232,8 @@ export const importItemsFromExcel = async (req, res) => {
         stock: normalizedRow.stock,
         category: normalizedRow.category.toString().trim(),
         sku: sku,
+        image: normalizedRow.image.toString().trim(),
+        specifications: normalizedRow.specifications,
       });
     }
 
@@ -261,3 +281,77 @@ export const importItemsFromExcel = async (req, res) => {
     });
   }
 };
+
+// Global search across all stores and items
+export const globalSearch = async (req, res) => {
+  try {
+    const { query, category } = req.query;
+
+    // Build search filter
+    let filter = {};
+
+    if (query && query.trim()) {
+      filter.$or = [
+        { itemName: { $regex: query, $options: "i" } },
+        { description: { $regex: query, $options: "i" } },
+        { category: { $regex: query, $options: "i" } },
+        { specifications: { $regex: query, $options: "i" } },
+      ];
+    }
+
+    if (category && category !== "All") {
+      filter.category = category;
+    }
+
+    const items = await itemModel
+      .find(filter)
+      .populate("storeId", "storeName email phone address city")
+      .sort({ createdAt: -1 })
+      .limit(100);
+
+    res.status(200).json({
+      message: "Global search completed",
+      items,
+    });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// Get all unique categories
+export const getAllCategories = async (req, res) => {
+  try {
+    const categories = await itemModel.distinct("category");
+    res.status(200).json({
+      message: "Categories retrieved successfully",
+      categories: categories.sort(),
+    });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// Get all unique specifications
+export const getAllSpecifications = async (req, res) => {
+  try {
+    const items = await itemModel.find({ specifications: { $exists: true, $ne: [] } });
+    const uniqueSpecs = new Set();
+    
+    items.forEach((item) => {
+      if (item.specifications && Array.isArray(item.specifications)) {
+        item.specifications.forEach((spec) => {
+          uniqueSpecs.add(spec);
+        });
+      }
+    });
+    
+    const specifications = Array.from(uniqueSpecs).sort();
+    res.status(200).json({
+      message: "Specifications retrieved successfully",
+      specifications,
+    });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+

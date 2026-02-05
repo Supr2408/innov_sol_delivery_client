@@ -45,12 +45,12 @@ const AdminLogin = () => {
   };
 
   return (
-    <div className="flex justify-center items-center h-screen bg-gray-100">
+    <div className="flex justify-center items-center min-h-screen bg-gray-100 px-4 py-8">
       <form
         onSubmit={onSubmitHandler}
-        className="bg-white p-8 rounded-lg shadow-md w-96"
+        className="bg-white p-6 sm:p-8 rounded-lg shadow-md w-full max-w-sm"
       >
-        <h2 className="text-2xl font-semibold text-center mb-2">
+        <h2 className="text-xl sm:text-2xl font-semibold text-center mb-4 sm:mb-6">
           {state}
         </h2>
 
@@ -58,7 +58,7 @@ const AdminLogin = () => {
           <input
             type="text"
             placeholder="Full Name"
-            className="w-full mb-3 p-2 border rounded"
+            className="w-full mb-2 sm:mb-3 p-2 sm:p-3 border rounded text-sm sm:text-base"
             value={name}
             onChange={(e) => setName(e.target.value)}
             required
@@ -68,7 +68,7 @@ const AdminLogin = () => {
         <input
           type="email"
           placeholder="Email"
-          className="w-full mb-3 p-2 border rounded"
+          className="w-full mb-2 sm:mb-3 p-2 sm:p-3 border rounded text-sm sm:text-base"
           value={email}
           onChange={(e) => setEmail(e.target.value)}
           required
@@ -77,13 +77,13 @@ const AdminLogin = () => {
         <input
           type="password"
           placeholder="Password"
-          className="w-full mb-4 p-2 border rounded"
+          className="w-full mb-4 sm:mb-6 p-2 sm:p-3 border rounded text-sm sm:text-base"
           value={password}
           onChange={(e) => setPassword(e.target.value)}
           required
         />
 
-        <button className="w-full bg-red-500 text-white py-2 rounded cursor-pointer hover:bg-red-600 transition-colors">
+        <button className="w-full bg-red-500 text-white py-2 sm:py-3 rounded cursor-pointer hover:bg-red-600 transition-colors font-medium text-sm sm:text-base">
           {state === "Login" ? "Login" : "Create Account"}
         </button>
 

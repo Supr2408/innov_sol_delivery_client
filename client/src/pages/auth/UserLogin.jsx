@@ -58,12 +58,12 @@ const UserLogin = () => {
   };
 
   return (
-    <div className="flex justify-center items-center h-screen bg-gray-100">
+    <div className="flex justify-center items-center min-h-screen bg-gray-100 px-4 py-8">
       <form
         onSubmit={onSubmitHandler}
-        className="bg-white p-8 rounded-lg shadow-md w-96"
+        className="bg-white p-6 sm:p-8 rounded-lg shadow-md w-full max-w-sm"
       >
-        <h2 className="text-2xl font-semibold text-center mb-4 capitalize">
+        <h2 className="text-xl sm:text-2xl font-semibold text-center mb-4 sm:mb-6 capitalize">
           {mode === "login" ? "User Login" : "User Registration"}
         </h2>
 
@@ -72,7 +72,7 @@ const UserLogin = () => {
             type="text"
             name="name"
             placeholder="Full Name"
-            className="w-full mb-3 p-2 border rounded"
+            className="w-full mb-2 sm:mb-3 p-2 sm:p-3 border rounded text-sm sm:text-base"
             value={name}
             onChange={onChangeHandler}
             required
@@ -83,7 +83,7 @@ const UserLogin = () => {
           type="email"
           name="email"
           placeholder="Email"
-          className="w-full mb-3 p-2 border rounded"
+          className="w-full mb-2 sm:mb-3 p-2 sm:p-3 border rounded text-sm sm:text-base"
           value={email}
           onChange={onChangeHandler}
           required
@@ -93,21 +93,21 @@ const UserLogin = () => {
           type="password"
           name="password"
           placeholder="Password"
-          className="w-full mb-4 p-2 border rounded"
+          className="w-full mb-4 sm:mb-6 p-2 sm:p-3 border rounded text-sm sm:text-base"
           value={password}
           onChange={onChangeHandler}
           required
         />
 
-        <button className="w-full bg-red-500 text-white py-2 rounded hover:bg-red-600">
+        <button className="w-full bg-red-500 text-white py-2 sm:py-3 rounded hover:bg-red-600 transition font-medium text-sm sm:text-base">
           {mode === "login" ? "Login" : "Register"}
         </button>
 
         {mode === "login" ? (
-          <p className="mt-4 text-center text-sm">
+          <p className="mt-4 text-center text-xs sm:text-sm">
             Don't have an account?{" "}
             <span
-              className="text-red-500 cursor-pointer"
+              className="text-red-500 cursor-pointer font-semibold hover:underline"
               onClick={() => {
                 setMode("register");
                 resetForm();
@@ -117,10 +117,10 @@ const UserLogin = () => {
             </span>
           </p>
         ) : (
-          <p className="mt-4 text-center text-sm">
+          <p className="mt-4 text-center text-xs sm:text-sm">
             Already have an account?{" "}
             <span
-              className="text-red-500 cursor-pointer"
+              className="text-red-500 cursor-pointer font-semibold hover:underline"
               onClick={() => {
                 setMode("login");
                 resetForm();

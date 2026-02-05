@@ -44,6 +44,11 @@ const itemSchema = new mongoose.Schema(
       type: String,
       default: "",
     },
+
+    specifications: {
+      type: [String],
+      default: [],
+    },
   },
   { timestamps: true }
 );
