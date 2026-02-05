@@ -8,9 +8,13 @@ const AppContextProvider = (props) => {
   const backendUrl = import.meta.env.VITE_BACKEND_URL;
 
   const [token, setToken] = useState(localStorage.getItem("token"));
-  const [user, setUser] = useState(null);
+  const [user, setUser] = useState(
+    localStorage.getItem("user")
+      ? JSON.parse(localStorage.getItem("user"))
+      : null
+  );
+  const [authLoading, setAuthLoading] = useState(true);
 
-  // 🔑 derived auth state
   const isAuthenticated = !!token;
   const userRole = user?.role || null;
 
@@ -18,32 +22,39 @@ const AppContextProvider = (props) => {
     axios.defaults.baseURL = backendUrl;
 
     if (token) {
-      axios.defaults.headers.common["Authorization"] = `Bearer ${token}`;
+      axios.defaults.headers.common.Authorization = `Bearer ${token}`;
     } else {
-      delete axios.defaults.headers.common["Authorization"];
+      delete axios.defaults.headers.common.Authorization;
     }
+
+    setAuthLoading(false);
   }, [token]);
 
+  useEffect(() => {
+    if (user) localStorage.setItem("user", JSON.stringify(user));
+    else localStorage.removeItem("user");
+  }, [user]);
+
   const logout = () => {
-    localStorage.removeItem("token");
+    localStorage.clear();
     setToken(null);
     setUser(null);
-    toast.success("Logged out successfully");
-  };
-
-  const value = {
-    backendUrl,
-    token,
-    setToken,
-    user,
-    setUser,
-    isAuthenticated, // ✅ NEW
-    userRole,        // ✅ NEW
-    logout,
+    toast.success("Logged out");
   };
 
   return (
-    <AppContext.Provider value={value}>
+    <AppContext.Provider
+      value={{
+        token,
+        setToken,
+        user,
+        setUser,
+        isAuthenticated,
+        userRole,
+        authLoading,
+        logout,
+      }}
+    >
       {props.children}
     </AppContext.Provider>
   );

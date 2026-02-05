@@ -43,7 +43,7 @@ const StoreDashboard = () => {
     try {
       setLoading(true);
       const { data } = await axios.get(`/items/${user.id}`);
-      setItems(data.items);
+      setItems(data.items || []);
     } catch (error) {
       toast.error("Failed to fetch items");
     } finally {
@@ -55,7 +55,7 @@ const StoreDashboard = () => {
     try {
       setLoading(true);
       const { data } = await axios.get(`/orders/${user.id}`);
-      setOrders(data.orders);
+      setOrders(data.orders || []);
     } catch (error) {
       toast.error("Failed to fetch orders");
     } finally {
@@ -67,7 +67,7 @@ const StoreDashboard = () => {
     try {
       setLoading(true);
       const { data } = await axios.get(`/orders/partners/${user.id}`);
-      setPartners(data.partners);
+      setPartners(data.partners || []);
     } catch (error) {
       toast.error("Failed to fetch delivery partners");
     } finally {
@@ -86,11 +86,7 @@ const StoreDashboard = () => {
   const handleAddItem = async (e) => {
     e.preventDefault();
 
-    if (
-      !formData.itemName ||
-      !formData.price ||
-      formData.stock === ""
-    ) {
+    if (!formData.itemName || !formData.price || formData.stock === "") {
       toast.error("Please fill in all required fields");
       return;
     }
@@ -119,9 +115,7 @@ const StoreDashboard = () => {
       setShowAddForm(false);
       fetchItems();
     } catch (error) {
-      toast.error(
-        error.response?.data?.message || "Failed to save item"
-      );
+      toast.error(error.response?.data?.message || "Failed to save item");
     } finally {
       setLoading(false);
     }
@@ -190,18 +184,21 @@ const StoreDashboard = () => {
           headers: {
             "Content-Type": "multipart/form-data",
           },
-        }
+        },
       );
 
       toast.success(`${data.importedCount} items imported successfully`);
       setShowImportForm(false);
       fetchItems();
     } catch (error) {
-      const errorMsg = error.response?.data?.message || "Failed to import items";
+      const errorMsg =
+        error.response?.data?.message || "Failed to import items";
       toast.error(errorMsg);
       // Show partial success message if applicable
       if (error.response?.status === 207) {
-        toast.info(`${error.response?.data?.failedCount} items had issues but some were imported`);
+        toast.info(
+          `${error.response?.data?.failedCount} items had issues but some were imported`,
+        );
       }
     } finally {
       setLoading(false);
@@ -211,14 +208,24 @@ const StoreDashboard = () => {
   const downloadTemplate = () => {
     const templateData = [
       ["Item Name", "Description", "Price", "Stock", "Category", "SKU"],
-      ["Laptop", "High-performance laptop", "999.99", "10", "Electronics", "LAP001"],
+      [
+        "Laptop",
+        "High-performance laptop",
+        "999.99",
+        "10",
+        "Electronics",
+        "LAP001",
+      ],
       ["Mouse", "Wireless mouse", "29.99", "50", "Accessories", "MOU001"],
     ];
 
     const csv = templateData.map((row) => row.join(",")).join("\n");
 
     const element = document.createElement("a");
-    element.setAttribute("href", "data:text/csv;charset=utf-8," + encodeURIComponent(csv));
+    element.setAttribute(
+      "href",
+      "data:text/csv;charset=utf-8," + encodeURIComponent(csv),
+    );
     element.setAttribute("download", "store_items_template.csv");
     element.style.display = "none";
     document.body.appendChild(element);
@@ -249,20 +256,32 @@ const StoreDashboard = () => {
     return "bg-red-100 text-red-800";
   };
 
+  const firstName = user?.storeName?.split(" ")[0];
+
+  if (!user || !user.id) {
+    return (
+      <div className="min-h-screen flex items-center justify-center text-gray-500">
+        Loading dashboard...
+      </div>
+    );
+  }
+
+
   return (
     <div className="min-h-screen bg-gray-50 p-6">
       <div className="max-w-7xl mx-auto">
         {/* Header */}
-        <div className="mb-8">
-          <h1 className="text-3xl font-bold text-gray-900">Store Dashboard</h1>
-          <p className="text-gray-600 mt-2">Welcome, {user?.storeName || "Store"}</p>
+        <div className="p-8">
+          <h1 className="text-2xl font-semibold mb-6">
+            Welcome, {firstName} 👋
+          </h1>
         </div>
 
         {/* Tabs */}
         <div className="flex gap-4 mb-8 border-b">
           <button
             onClick={() => setActiveTab("stock")}
-            className={`px-6 py-3 font-semibold border-b-2 transition ${
+            className={`px-6 py-3 font-semibold border-b-2 transition cursor-pointer ${
               activeTab === "stock"
                 ? "border-blue-500 text-blue-600"
                 : "border-transparent text-gray-600 hover:text-gray-900"
@@ -272,7 +291,7 @@ const StoreDashboard = () => {
           </button>
           <button
             onClick={() => setActiveTab("orders")}
-            className={`px-6 py-3 font-semibold border-b-2 transition ${
+            className={`px-6 py-3 font-semibold border-b-2 transition cursor-pointer ${
               activeTab === "orders"
                 ? "border-blue-500 text-blue-600"
                 : "border-transparent text-gray-600 hover:text-gray-900"
@@ -282,7 +301,7 @@ const StoreDashboard = () => {
           </button>
           <button
             onClick={() => setActiveTab("deliveries")}
-            className={`px-6 py-3 font-semibold border-b-2 transition ${
+            className={`px-6 py-3 font-semibold border-b-2 transition cursor-pointer ${
               activeTab === "deliveries"
                 ? "border-blue-500 text-blue-600"
                 : "border-transparent text-gray-600 hover:text-gray-900"
@@ -309,254 +328,279 @@ const StoreDashboard = () => {
                     sku: "",
                   });
                 }}
-                className="bg-blue-500 text-white px-6 py-2 rounded hover:bg-blue-600 transition"
+                className="bg-blue-500 text-white px-6 py-2 rounded hover:bg-blue-600 transition cursor-pointer"
               >
                 {showAddForm ? "Cancel" : "+ Add Item"}
               </button>
               <button
                 onClick={() => setShowImportForm(!showImportForm)}
-                className="bg-green-500 text-white px-6 py-2 rounded hover:bg-green-600 transition"
+                className="bg-green-500 text-white px-6 py-2 rounded hover:bg-green-600 transition cursor-pointer"
               >
                 {showImportForm ? "Cancel" : "📥 Import Excel"}
               </button>
             </div>
 
             {/* Add Item Form */}
-        {showAddForm && (
-          <div className="bg-white p-6 rounded-lg shadow mb-8">
-            <h2 className="text-xl font-semibold mb-4">
-              {editingId ? "Edit Item" : "Add New Item"}
-            </h2>
-            <form onSubmit={handleAddItem} className="grid grid-cols-2 gap-4">
-              <input
-                type="text"
-                name="itemName"
-                placeholder="Item Name *"
-                value={formData.itemName}
-                onChange={handleInputChange}
-                className="border p-2 rounded col-span-2"
-                required
-              />
-              <input
-                type="text"
-                name="description"
-                placeholder="Description"
-                value={formData.description}
-                onChange={handleInputChange}
-                className="border p-2 rounded"
-              />
-              <input
-                type="number"
-                name="price"
-                placeholder="Price *"
-                value={formData.price}
-                onChange={handleInputChange}
-                className="border p-2 rounded"
-                required
-              />
-              <input
-                type="number"
-                name="stock"
-                placeholder="Stock *"
-                value={formData.stock}
-                onChange={handleInputChange}
-                className="border p-2 rounded"
-                required
-              />
-              <input
-                type="text"
-                name="category"
-                placeholder="Category"
-                value={formData.category}
-                onChange={handleInputChange}
-                className="border p-2 rounded"
-              />
-              <input
-                type="text"
-                name="sku"
-                placeholder="SKU (Optional)"
-                value={formData.sku}
-                onChange={handleInputChange}
-                className="border p-2 rounded"
-              />
-              <button
-                type="submit"
-                disabled={loading}
-                className="col-span-2 bg-blue-500 text-white p-2 rounded hover:bg-blue-600 disabled:bg-gray-400 transition"
-              >
-                {loading ? "Saving..." : editingId ? "Update Item" : "Add Item"}
-              </button>
-            </form>
-          </div>
-        )}
+            {showAddForm && (
+              <div className="bg-white p-6 rounded-lg shadow mb-8">
+                <h2 className="text-xl font-semibold mb-4">
+                  {editingId ? "Edit Item" : "Add New Item"}
+                </h2>
+                <form
+                  onSubmit={handleAddItem}
+                  className="grid grid-cols-2 gap-4"
+                >
+                  <input
+                    type="text"
+                    name="itemName"
+                    placeholder="Item Name *"
+                    value={formData.itemName}
+                    onChange={handleInputChange}
+                    className="border p-2 rounded col-span-2"
+                    required
+                  />
+                  <input
+                    type="text"
+                    name="description"
+                    placeholder="Description"
+                    value={formData.description}
+                    onChange={handleInputChange}
+                    className="border p-2 rounded"
+                  />
+                  <input
+                    type="number"
+                    name="price"
+                    placeholder="Price *"
+                    value={formData.price}
+                    onChange={handleInputChange}
+                    className="border p-2 rounded"
+                    required
+                  />
+                  <input
+                    type="number"
+                    name="stock"
+                    placeholder="Stock *"
+                    value={formData.stock}
+                    onChange={handleInputChange}
+                    className="border p-2 rounded"
+                    required
+                  />
+                  <input
+                    type="text"
+                    name="category"
+                    placeholder="Category"
+                    value={formData.category}
+                    onChange={handleInputChange}
+                    className="border p-2 rounded"
+                  />
+                  <input
+                    type="text"
+                    name="sku"
+                    placeholder="SKU (Optional)"
+                    value={formData.sku}
+                    onChange={handleInputChange}
+                    className="border p-2 rounded"
+                  />
+                  <button
+                    type="submit"
+                    disabled={loading}
+                    className="col-span-2 bg-blue-500 text-white p-2 rounded hover:bg-blue-600 disabled:bg-gray-400 transition cursor-pointer"
+                  >
+                    {loading
+                      ? "Saving..."
+                      : editingId
+                        ? "Update Item"
+                        : "Add Item"}
+                  </button>
+                </form>
+              </div>
+            )}
 
             {/* Import Form */}
-        {showImportForm && (
-          <div className="bg-white p-6 rounded-lg shadow mb-8">
-            <h2 className="text-xl font-semibold mb-4">Import Items from Excel</h2>
-            <div className="space-y-4">
-              <div className="bg-blue-50 p-4 rounded border border-blue-200">
-                <h3 className="font-semibold text-blue-900 mb-2">📋 Supported Column Names:</h3>
-                <div className="grid grid-cols-2 gap-2 text-sm text-blue-800">
-                  <div>
-                    <strong>Item Name:</strong> Item Name, itemName, name, Product Name
+            {showImportForm && (
+              <div className="bg-white p-6 rounded-lg shadow mb-8">
+                <h2 className="text-xl font-semibold mb-4">
+                  Import Items from Excel
+                </h2>
+                <div className="space-y-4">
+                  <div className="bg-blue-50 p-4 rounded border border-blue-200">
+                    <h3 className="font-semibold text-blue-900 mb-2">
+                      📋 Supported Column Names:
+                    </h3>
+                    <div className="grid grid-cols-2 gap-2 text-sm text-blue-800">
+                      <div>
+                        <strong>Item Name:</strong> Item Name, itemName, name,
+                        Product Name
+                      </div>
+                      <div>
+                        <strong>Price:</strong> Price, price, Unit Price,
+                        unitPrice
+                      </div>
+                      <div>
+                        <strong>Stock:</strong> Stock, stock, Qty, quantity,
+                        Quantity
+                      </div>
+                      <div>
+                        <strong>Category:</strong> Category, category, Product
+                        Category
+                      </div>
+                      <div>
+                        <strong>Description:</strong> Description, description,
+                        desc, Product Description
+                      </div>
+                      <div>
+                        <strong>SKU:</strong> SKU, sku, code, Product SKU
+                        (optional)
+                      </div>
+                    </div>
                   </div>
-                  <div>
-                    <strong>Price:</strong> Price, price, Unit Price, unitPrice
-                  </div>
-                  <div>
-                    <strong>Stock:</strong> Stock, stock, Qty, quantity, Quantity
-                  </div>
-                  <div>
-                    <strong>Category:</strong> Category, category, Product Category
-                  </div>
-                  <div>
-                    <strong>Description:</strong> Description, description, desc, Product Description
-                  </div>
-                  <div>
-                    <strong>SKU:</strong> SKU, sku, code, Product SKU (optional)
-                  </div>
+
+                  <p className="text-gray-600 text-sm">
+                    ✅ System will auto-generate SKU if not provided
+                  </p>
+                  <p className="text-gray-600 text-sm">
+                    ✅ Works with any Excel format (XLSX, XLS, CSV)
+                  </p>
+                  <p className="text-gray-600 text-sm">
+                    ✅ Duplicates will be handled automatically
+                  </p>
+
+                  <button
+                    onClick={downloadTemplate}
+                    className="bg-green-500 text-white px-4 py-2 rounded hover:bg-green-600 transition cursor-pointer"
+                  >
+                    📥 Download Template CSV
+                  </button>
+
+                  <input
+                    type="file"
+                    accept=".xlsx,.xls,.csv,.ods"
+                    onChange={handleFileUpload}
+                    disabled={loading}
+                    className="border p-2 rounded w-full cursor-pointer"
+                  />
+
+                  {loading && (
+                    <div className="text-center text-blue-500">
+                      Importing items... Please wait
+                    </div>
+                  )}
                 </div>
               </div>
-
-              <p className="text-gray-600 text-sm">
-                ✅ System will auto-generate SKU if not provided
-              </p>
-              <p className="text-gray-600 text-sm">
-                ✅ Works with any Excel format (XLSX, XLS, CSV)
-              </p>
-              <p className="text-gray-600 text-sm">
-                ✅ Duplicates will be handled automatically
-              </p>
-
-              <button
-                onClick={downloadTemplate}
-                className="bg-green-500 text-white px-4 py-2 rounded hover:bg-green-600 transition"
-              >
-                📥 Download Template CSV
-              </button>
-
-              <input
-                type="file"
-                accept=".xlsx,.xls,.csv,.ods"
-                onChange={handleFileUpload}
-                disabled={loading}
-                className="border p-2 rounded w-full cursor-pointer"
-              />
-              
-              {loading && (
-                <div className="text-center text-blue-500">
-                  Importing items... Please wait
-                </div>
-              )}
-            </div>
-          </div>
-        )}
+            )}
 
             {/* Items Table */}
-        <div className="bg-white rounded-lg shadow overflow-hidden">
-          <div className="overflow-x-auto">
-            {loading && items.length === 0 ? (
-              <div className="p-6 text-center text-gray-500">Loading items...</div>
-            ) : items.length === 0 ? (
-              <div className="p-6 text-center text-gray-500">No items added yet</div>
-            ) : (
-              <table className="w-full">
-                <thead className="bg-gray-100">
-                  <tr>
-                    <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">
-                      Item Name
-                    </th>
-                    <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">
-                      Category
-                    </th>
-                    <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">
-                      Price
-                    </th>
-                    <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">
-                      Stock
-                    </th>
-                    <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">
-                      SKU
-                    </th>
-                    <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">
-                      Actions
-                    </th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y">
-                  {items.map((item) => (
-                    <tr key={item._id} className="hover:bg-gray-50">
-                      <td className="px-6 py-4 text-sm text-gray-900">
-                        {item.itemName}
-                      </td>
-                      <td className="px-6 py-4 text-sm text-gray-600">
-                        {item.category}
-                      </td>
-                      <td className="px-6 py-4 text-sm font-semibold text-gray-900">
-                        ${item.price.toFixed(2)}
-                      </td>
-                      <td className="px-6 py-4 text-sm">
-                        {editStockId === item._id ? (
-                          <div className="flex gap-2">
-                            <input
-                              type="number"
-                              value={editStockValue}
-                              onChange={(e) => setEditStockValue(e.target.value)}
-                              className="border p-1 rounded w-16"
-                              autoFocus
-                            />
+            <div className="bg-white rounded-lg shadow overflow-hidden">
+              <div className="overflow-x-auto">
+                {loading && items.length === 0 ? (
+                  <div className="p-6 text-center text-gray-500">
+                    Loading items...
+                  </div>
+                ) : items.length === 0 ? (
+                  <div className="p-6 text-center text-gray-500">
+                    No items added yet
+                  </div>
+                ) : (
+                  <table className="w-full">
+                    <thead className="bg-gray-100">
+                      <tr>
+                        <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">
+                          Item Name
+                        </th>
+                        <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">
+                          Category
+                        </th>
+                        <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">
+                          Price
+                        </th>
+                        <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">
+                          Stock
+                        </th>
+                        <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">
+                          SKU
+                        </th>
+                        <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">
+                          Actions
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y">
+                      {items.map((item) => (
+                        <tr key={item._id} className="hover:bg-gray-50">
+                          <td className="px-6 py-4 text-sm text-gray-900">
+                            {item.itemName}
+                          </td>
+                          <td className="px-6 py-4 text-sm text-gray-600">
+                            {item.category}
+                          </td>
+                          <td className="px-6 py-4 text-sm font-semibold text-gray-900">
+                            ${item.price.toFixed(2)}
+                          </td>
+                          <td className="px-6 py-4 text-sm">
+                            {editStockId === item._id ? (
+                              <div className="flex gap-2">
+                                <input
+                                  type="number"
+                                  value={editStockValue}
+                                  onChange={(e) =>
+                                    setEditStockValue(e.target.value)
+                                  }
+                                  className="border p-1 rounded w-16"
+                                  autoFocus
+                                />
+                                <button
+                                  onClick={() =>
+                                    handleUpdateStock(item._id, editStockValue)
+                                  }
+                                  className="bg-green-500 text-white px-2 py-1 rounded text-xs"
+                                >
+                                  Save
+                                </button>
+                                <button
+                                  onClick={() => setEditStockId(null)}
+                                  className="bg-gray-400 text-white px-2 py-1 rounded text-xs"
+                                >
+                                  Cancel
+                                </button>
+                              </div>
+                            ) : (
+                              <div
+                                onClick={() => {
+                                  setEditStockId(item._id);
+                                  setEditStockValue(item.stock);
+                                }}
+                                className={`inline-block px-3 py-1 rounded-full text-xs font-semibold cursor-pointer ${getStockColor(
+                                  item.stock,
+                                )}`}
+                              >
+                                {item.stock} units
+                              </div>
+                            )}
+                          </td>
+                          <td className="px-6 py-4 text-sm text-gray-600">
+                            {item.sku || "-"}
+                          </td>
+                          <td className="px-6 py-4 text-sm space-x-2">
                             <button
-                              onClick={() => handleUpdateStock(item._id, editStockValue)}
-                              className="bg-green-500 text-white px-2 py-1 rounded text-xs"
+                              onClick={() => handleEditItem(item)}
+                              className="text-blue-500 hover:text-blue-700 font-semibold"
                             >
-                              Save
+                              Edit
                             </button>
                             <button
-                              onClick={() => setEditStockId(null)}
-                              className="bg-gray-400 text-white px-2 py-1 rounded text-xs"
+                              onClick={() => handleDeleteItem(item._id)}
+                              className="text-red-500 hover:text-red-700 font-semibold"
                             >
-                              Cancel
+                              Delete
                             </button>
-                          </div>
-                        ) : (
-                          <div
-                            onClick={() => {
-                              setEditStockId(item._id);
-                              setEditStockValue(item.stock);
-                            }}
-                            className={`inline-block px-3 py-1 rounded-full text-xs font-semibold cursor-pointer ${getStockColor(
-                              item.stock
-                            )}`}
-                          >
-                            {item.stock} units
-                          </div>
-                        )}
-                      </td>
-                      <td className="px-6 py-4 text-sm text-gray-600">
-                        {item.sku || "-"}
-                      </td>
-                      <td className="px-6 py-4 text-sm space-x-2">
-                        <button
-                          onClick={() => handleEditItem(item)}
-                          className="text-blue-500 hover:text-blue-700 font-semibold"
-                        >
-                          Edit
-                        </button>
-                        <button
-                          onClick={() => handleDeleteItem(item._id)}
-                          className="text-red-500 hover:text-red-700 font-semibold"
-                        >
-                          Delete
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-          </div>
-        </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            </div>
           </div>
         )}
 
@@ -565,20 +609,36 @@ const StoreDashboard = () => {
           <div className="bg-white rounded-lg shadow">
             <div className="p-6">
               {loading ? (
-                <div className="text-center text-gray-500">Loading orders...</div>
+                <div className="text-center text-gray-500">
+                  Loading orders...
+                </div>
               ) : orders.length === 0 ? (
-                <div className="text-center text-gray-500 py-8">No orders yet</div>
+                <div className="text-center text-gray-500 py-8">
+                  No orders yet
+                </div>
               ) : (
                 <div className="overflow-x-auto">
                   <table className="w-full">
                     <thead className="bg-gray-100">
                       <tr>
-                        <th className="px-6 py-3 text-left text-sm font-semibold">Order ID</th>
-                        <th className="px-6 py-3 text-left text-sm font-semibold">Client</th>
-                        <th className="px-6 py-3 text-left text-sm font-semibold">Amount</th>
-                        <th className="px-6 py-3 text-left text-sm font-semibold">Status</th>
-                        <th className="px-6 py-3 text-left text-sm font-semibold">Partner</th>
-                        <th className="px-6 py-3 text-left text-sm font-semibold">Date</th>
+                        <th className="px-6 py-3 text-left text-sm font-semibold">
+                          Order ID
+                        </th>
+                        <th className="px-6 py-3 text-left text-sm font-semibold">
+                          Client
+                        </th>
+                        <th className="px-6 py-3 text-left text-sm font-semibold">
+                          Amount
+                        </th>
+                        <th className="px-6 py-3 text-left text-sm font-semibold">
+                          Status
+                        </th>
+                        <th className="px-6 py-3 text-left text-sm font-semibold">
+                          Partner
+                        </th>
+                        <th className="px-6 py-3 text-left text-sm font-semibold">
+                          Date
+                        </th>
                       </tr>
                     </thead>
                     <tbody className="divide-y">
@@ -587,10 +647,16 @@ const StoreDashboard = () => {
                           <td className="px-6 py-4 text-sm font-medium text-gray-900">
                             {order.orderId}
                           </td>
-                          <td className="px-6 py-4 text-sm text-gray-600">{order.clientName}</td>
-                          <td className="px-6 py-4 text-sm font-semibold">${order.totalAmount.toFixed(2)}</td>
+                          <td className="px-6 py-4 text-sm text-gray-600">
+                            {order.clientName}
+                          </td>
+                          <td className="px-6 py-4 text-sm font-semibold">
+                            ${order.totalAmount.toFixed(2)}
+                          </td>
                           <td className="px-6 py-4 text-sm">
-                            <span className={`px-3 py-1 rounded-full text-xs font-semibold ${getStatusColor(order.status)}`}>
+                            <span
+                              className={`px-3 py-1 rounded-full text-xs font-semibold ${getStatusColor(order.status)}`}
+                            >
                               {order.status.replace(/_/g, " ")}
                             </span>
                           </td>
@@ -614,7 +680,9 @@ const StoreDashboard = () => {
         {activeTab === "deliveries" && (
           <div>
             {loading ? (
-              <div className="text-center text-gray-500 py-8">Loading partners...</div>
+              <div className="text-center text-gray-500 py-8">
+                Loading partners...
+              </div>
             ) : partners.length === 0 ? (
               <div className="bg-white rounded-lg shadow p-6 text-center text-gray-500">
                 No delivery partners yet
@@ -622,8 +690,13 @@ const StoreDashboard = () => {
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                 {partners.map((partner) => (
-                  <div key={partner.id} className="bg-white rounded-lg shadow p-6">
-                    <h3 className="text-lg font-semibold text-gray-900 mb-2">{partner.name}</h3>
+                  <div
+                    key={partner.id}
+                    className="bg-white rounded-lg shadow p-6"
+                  >
+                    <h3 className="text-lg font-semibold text-gray-900 mb-2">
+                      {partner.name}
+                    </h3>
                     <div className="space-y-2 text-sm text-gray-600">
                       <p>
                         <strong>📞 Phone:</strong> {partner.phone}
@@ -636,10 +709,16 @@ const StoreDashboard = () => {
                       </p>
                       <div className="border-t pt-3 mt-3">
                         <p className="font-semibold text-gray-900">
-                          Total Deliveries: <span className="text-blue-600">{partner.totalDeliveries}</span>
+                          Total Deliveries:{" "}
+                          <span className="text-blue-600">
+                            {partner.totalDeliveries}
+                          </span>
                         </p>
                         <p className="font-semibold text-gray-900">
-                          Total Amount: <span className="text-green-600">${partner.totalAmount.toFixed(2)}</span>
+                          Total Amount:{" "}
+                          <span className="text-green-600">
+                            ${partner.totalAmount.toFixed(2)}
+                          </span>
                         </p>
                       </div>
                     </div>

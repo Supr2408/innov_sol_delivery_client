@@ -50,7 +50,7 @@ const UserLogin = () => {
 
         toast.success("Registration successful. Please login.");
         setMode("login");
-        resetForm(); // 🔥 IMPORTANT FIX
+        resetForm();
       }
     } catch (error) {
       toast.error(error.response?.data?.message || "Something went wrong");
@@ -105,7 +105,7 @@ const UserLogin = () => {
 
         {mode === "login" ? (
           <p className="mt-4 text-center text-sm">
-            New user?{" "}
+            Don't have an account?{" "}
             <span
               className="text-red-500 cursor-pointer"
               onClick={() => {
@@ -118,7 +118,7 @@ const UserLogin = () => {
           </p>
         ) : (
           <p className="mt-4 text-center text-sm">
-            Already registered?{" "}
+            Already have an account?{" "}
             <span
               className="text-red-500 cursor-pointer"
               onClick={() => {
