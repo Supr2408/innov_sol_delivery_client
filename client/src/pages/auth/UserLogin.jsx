@@ -1,4 +1,4 @@
-import React, { useContext, useState } from "react";
+import { useContext, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import axios from "axios";
 import { toast } from "react-toastify";
@@ -8,27 +8,39 @@ const UserLogin = () => {
   const navigate = useNavigate();
   const { setToken, setUser } = useContext(AppContext);
 
-  const [state, setState] = useState("Login");
-  const [name, setName] = useState("");
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
+  const [mode, setMode] = useState("login"); // login | register
+  const [formData, setFormData] = useState({
+    name: "",
+    email: "",
+    password: "",
+  });
+
+  const { name, email, password } = formData;
+
+  const onChangeHandler = (e) => {
+    setFormData({ ...formData, [e.target.name]: e.target.value });
+  };
+
+  const resetForm = () => {
+    setFormData({ name: "", email: "", password: "" });
+  };
 
   const onSubmitHandler = async (e) => {
     e.preventDefault();
 
     try {
-      if (state === "Login") {
+      if (mode === "login") {
         const { data } = await axios.post("/users/login", {
           email,
           password,
         });
 
         setToken(data.token);
-        setUser(data.user);
+        setUser({ ...data.user, role: "user" });
         localStorage.setItem("token", data.token);
 
         toast.success("Login successful");
-        navigate("/");
+        navigate("/user-dashboard");
       } else {
         await axios.post("/users/register", {
           name,
@@ -37,7 +49,8 @@ const UserLogin = () => {
         });
 
         toast.success("Registration successful. Please login.");
-        setState("Login");
+        setMode("login");
+        resetForm(); // 🔥 IMPORTANT FIX
       }
     } catch (error) {
       toast.error(error.response?.data?.message || "Something went wrong");
@@ -50,59 +63,68 @@ const UserLogin = () => {
         onSubmit={onSubmitHandler}
         className="bg-white p-8 rounded-lg shadow-md w-96"
       >
-        <h2 className="text-2xl font-semibold text-center mb-2">
-          {state}
+        <h2 className="text-2xl font-semibold text-center mb-4 capitalize">
+          {mode === "login" ? "User Login" : "User Registration"}
         </h2>
 
-        {state !== "Login" && (
+        {mode === "register" && (
           <input
             type="text"
+            name="name"
             placeholder="Full Name"
             className="w-full mb-3 p-2 border rounded"
             value={name}
-            onChange={(e) => setName(e.target.value)}
+            onChange={onChangeHandler}
             required
           />
         )}
 
         <input
           type="email"
+          name="email"
           placeholder="Email"
           className="w-full mb-3 p-2 border rounded"
           value={email}
-          onChange={(e) => setEmail(e.target.value)}
+          onChange={onChangeHandler}
           required
         />
 
         <input
           type="password"
+          name="password"
           placeholder="Password"
           className="w-full mb-4 p-2 border rounded"
           value={password}
-          onChange={(e) => setPassword(e.target.value)}
+          onChange={onChangeHandler}
           required
         />
 
-        <button className="w-full bg-red-500 text-white py-2 rounded cursor-pointer hover:bg-red-600 transition-colors">
-          {state === "Login" ? "Login" : "Create Account"}
+        <button className="w-full bg-red-500 text-white py-2 rounded hover:bg-red-600">
+          {mode === "login" ? "Login" : "Register"}
         </button>
 
-        {state === "Login" ? (
+        {mode === "login" ? (
           <p className="mt-4 text-center text-sm">
-            Don’t have an account?{" "}
+            New user?{" "}
             <span
               className="text-red-500 cursor-pointer"
-              onClick={() => setState("Register")}
+              onClick={() => {
+                setMode("register");
+                resetForm();
+              }}
             >
-              Register
+              Create an account
             </span>
           </p>
         ) : (
           <p className="mt-4 text-center text-sm">
-            Already have an account?{" "}
+            Already registered?{" "}
             <span
               className="text-red-500 cursor-pointer"
-              onClick={() => setState("Login")}
+              onClick={() => {
+                setMode("login");
+                resetForm();
+              }}
             >
               Login
             </span>
