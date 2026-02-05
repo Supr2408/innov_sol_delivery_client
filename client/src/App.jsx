@@ -1,11 +1,76 @@
-import React from 'react'
+import React, { useContext } from "react";
+import Navbar from "./components/Navbar";
+import { Route, Routes } from "react-router-dom";
+import Home from "./pages/landing/Home";
+import AdminLogin from "./pages/auth/AdminLogin";
+import UserLogin from "./pages/auth/UserLogin";
+import PartnerLogin from "./pages/auth/PartnerLogin";
+import StoreLogin from "./pages/auth/StoreLogin";
+import StoreDashboard from "./pages/store/StoreDashboard";
+import Footer from "./components/Footer";
+
+import { ToastContainer } from "react-toastify";
+import "react-toastify/dist/ReactToastify.css";
+import UserDashboard from "./pages/user/UserDashboard";
+import { AppContext } from "./context/AppContext";
+import UserNavbar from "./components/UserNavbar";
+import StoreNavbar from "./components/StoreNavbar";
+import ProtectedRoute from "./components/ProtectedRoute";
+import Unauthorized from "./pages/errors/Unauthorized";
+import NotFound from "./pages/errors/NotFound";
 
 const App = () => {
-  return (
-    <div>
-      Welcome to the App!
-    </div>
-  )
-}
+  const { isAuthenticated, userRole } = useContext(AppContext);
 
-export default App
+  return (
+    <div className="min-h-screen flex flex-col">
+      <ToastContainer position="bottom-right" />
+
+      {/* NAVBAR */}
+      {!isAuthenticated && <Navbar />}
+      {isAuthenticated && userRole === "user" && <UserNavbar />}
+      {isAuthenticated && userRole === "store" && <StoreNavbar />}
+
+      {/* MAIN CONTENT */}
+      <main className="flex-grow">
+        <Routes>
+          {/* PUBLIC */}
+          <Route path="/" element={<Home />} />
+          <Route path="/user-login" element={<UserLogin />} />
+          <Route path="/store-login" element={<StoreLogin />} />
+          <Route path="/admin-login" element={<AdminLogin />} />
+          <Route path="/partner-login" element={<PartnerLogin />} />
+
+          {/* USER */}
+          <Route
+            path="/user-dashboard"
+            element={
+              <ProtectedRoute allowedRoles={["user"]}>
+                <UserDashboard />
+              </ProtectedRoute>
+            }
+          />
+
+          {/* STORE */}
+          <Route
+            path="/store-dashboard"
+            element={
+              <ProtectedRoute allowedRoles={["store"]}>
+                <StoreDashboard />
+              </ProtectedRoute>
+            }
+          />
+
+          {/* ERRORS */}
+          <Route path="/unauthorized" element={<Unauthorized />} />
+          <Route path="*" element={<NotFound />} />
+        </Routes>
+      </main>
+
+      {/* FOOTER */}
+      {!isAuthenticated && <Footer />}
+    </div>
+  );
+};
+
+export default App;
