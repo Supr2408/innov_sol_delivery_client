@@ -7,13 +7,12 @@ import UserLogin from './pages/auth/UserLogin'
 import PartnerLogin from './pages/auth/PartnerLogin'
 import StoreLogin from './pages/auth/StoreLogin'
 import Footer from './components/Footer'
-import ClientTracking from './pages/tracking/ClientTracking'
-import PartnerTracking from './pages/tracking/PartnerTracking'
-import ClientDashboard from './pages/client/ClientDashboard'
-import PartnerDashboard from './pages/partner/PartnerDashboard'
+import { ToastContainer } from 'react-toastify'
+import 'react-toastify/dist/ReactToastify.css'
 const App = () => {
   return (
     <div>
+      <ToastContainer position="bottom-right" />
       <Navbar />
       {/* Other components and routes will go here */}
       <div>
@@ -33,7 +32,7 @@ const App = () => {
 
       <Footer />
     </div>
-  )
-}
+  );
+};
 
-export default App
+export default App;
