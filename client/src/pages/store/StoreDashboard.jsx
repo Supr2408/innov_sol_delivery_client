@@ -22,9 +22,12 @@ const StoreDashboard = () => {
     stock: "",
     category: "General",
     sku: "",
+    image: "",
+    specifications: [],
   });
 
   const [editingId, setEditingId] = useState(null);
+  const [selectedCategory, setSelectedCategory] = useState("All");
 
   // Fetch data based on active tab
   useEffect(() => {
@@ -111,6 +114,8 @@ const StoreDashboard = () => {
         stock: "",
         category: "General",
         sku: "",
+        image: "",
+        specifications: [],
       });
       setShowAddForm(false);
       fetchItems();
@@ -148,6 +153,8 @@ const StoreDashboard = () => {
       stock: item.stock,
       category: item.category,
       sku: item.sku || "",
+      image: item.image || "",
+      specifications: item.specifications || [],
     });
     setEditingId(item._id);
     setShowAddForm(true);
@@ -207,7 +214,15 @@ const StoreDashboard = () => {
 
   const downloadTemplate = () => {
     const templateData = [
-      ["Item Name", "Description", "Price", "Stock", "Category", "SKU"],
+      [
+        "Item Name",
+        "Description",
+        "Price",
+        "Stock",
+        "Category",
+        "SKU",
+        "Image",
+      ],
       [
         "Laptop",
         "High-performance laptop",
@@ -215,8 +230,17 @@ const StoreDashboard = () => {
         "10",
         "Electronics",
         "LAP001",
+        "https://example.com/laptop.jpg",
       ],
-      ["Mouse", "Wireless mouse", "29.99", "50", "Accessories", "MOU001"],
+      [
+        "Mouse",
+        "Wireless mouse",
+        "29.99",
+        "50",
+        "Accessories",
+        "MOU001",
+        "https://example.com/mouse.jpg",
+      ],
     ];
 
     const csv = templateData.map((row) => row.join(",")).join("\n");
@@ -256,6 +280,20 @@ const StoreDashboard = () => {
     return "bg-red-100 text-red-800";
   };
 
+  // Get unique categories from items
+  const getCategories = () => {
+    const categories = new Set(items.map((item) => item.category));
+    return ["All", ...Array.from(categories).sort()];
+  };
+
+  // Filter items by selected category
+  const getFilteredItems = () => {
+    if (selectedCategory === "All") {
+      return items;
+    }
+    return items.filter((item) => item.category === selectedCategory);
+  };
+
   const firstName = user?.storeName?.split(" ")[0];
 
   if (!user || !user.id) {
@@ -268,30 +306,30 @@ const StoreDashboard = () => {
 
 
   return (
-    <div className="min-h-screen bg-gray-50 p-6">
-      <div className="max-w-7xl mx-auto">
+    <div className="min-h-screen bg-gray-50">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 py-6">
         {/* Header */}
-        <div className="p-8">
-          <h1 className="text-2xl font-semibold mb-6">
+        <div className="p-4 sm:p-8 mb-4">
+          <h1 className="text-xl sm:text-2xl font-semibold">
             Welcome, {firstName} 👋
           </h1>
         </div>
 
-        {/* Tabs */}
-        <div className="flex gap-4 mb-8 border-b">
+        {/* Tabs - Mobile Scrollable */}
+        <div className="flex gap-2 sm:gap-4 mb-6 sm:mb-8 border-b overflow-x-auto pb-2 sm:pb-0 flex-nowrap">
           <button
             onClick={() => setActiveTab("stock")}
-            className={`px-6 py-3 font-semibold border-b-2 transition cursor-pointer ${
+            className={`px-3 sm:px-6 py-2 sm:py-3 font-semibold border-b-2 transition cursor-pointer text-sm sm:text-base whitespace-nowrap ${
               activeTab === "stock"
                 ? "border-blue-500 text-blue-600"
                 : "border-transparent text-gray-600 hover:text-gray-900"
             }`}
           >
-            📦 Stock Management
+            📦 Stock
           </button>
           <button
             onClick={() => setActiveTab("orders")}
-            className={`px-6 py-3 font-semibold border-b-2 transition cursor-pointer ${
+            className={`px-3 sm:px-6 py-2 sm:py-3 font-semibold border-b-2 transition cursor-pointer text-sm sm:text-base whitespace-nowrap ${
               activeTab === "orders"
                 ? "border-blue-500 text-blue-600"
                 : "border-transparent text-gray-600 hover:text-gray-900"
@@ -301,20 +339,20 @@ const StoreDashboard = () => {
           </button>
           <button
             onClick={() => setActiveTab("deliveries")}
-            className={`px-6 py-3 font-semibold border-b-2 transition cursor-pointer ${
+            className={`px-3 sm:px-6 py-2 sm:py-3 font-semibold border-b-2 transition cursor-pointer text-sm sm:text-base whitespace-nowrap ${
               activeTab === "deliveries"
                 ? "border-blue-500 text-blue-600"
                 : "border-transparent text-gray-600 hover:text-gray-900"
             }`}
           >
-            🚗 Delivery Partners
+            🚗 Delivery
           </button>
         </div>
 
         {/* STOCK MANAGEMENT TAB */}
         {activeTab === "stock" && (
           <div>
-            <div className="flex gap-4 mb-8">
+            <div className="flex gap-2 sm:gap-4 mb-6 sm:mb-8 items-center flex-wrap">
               <button
                 onClick={() => {
                   setShowAddForm(!showAddForm);
@@ -326,24 +364,53 @@ const StoreDashboard = () => {
                     stock: "",
                     category: "General",
                     sku: "",
+                    image: "",
                   });
                 }}
-                className="bg-blue-500 text-white px-6 py-2 rounded hover:bg-blue-600 transition cursor-pointer"
+                className="bg-blue-500 text-white px-3 sm:px-6 py-2 rounded hover:bg-blue-600 transition cursor-pointer text-sm sm:text-base font-medium"
               >
-                {showAddForm ? "Cancel" : "+ Add Item"}
+                {showAddForm ? "Cancel" : "+ Add"}
               </button>
               <button
                 onClick={() => setShowImportForm(!showImportForm)}
-                className="bg-green-500 text-white px-6 py-2 rounded hover:bg-green-600 transition cursor-pointer"
+                className="bg-green-500 text-white px-3 sm:px-6 py-2 rounded hover:bg-green-600 transition cursor-pointer text-sm sm:text-base font-medium"
               >
-                {showImportForm ? "Cancel" : "📥 Import Excel"}
+                {showImportForm ? "Cancel" : "📥 Import"}
               </button>
+
+              {/* Category Filter Dropdown */}
+              <select
+                value={selectedCategory}
+                onChange={(e) => setSelectedCategory(e.target.value)}
+                className="border border-gray-300 rounded px-2 sm:px-4 py-2 focus:outline-none focus:border-blue-500 bg-white cursor-pointer text-sm sm:text-base"
+              >
+                {getCategories().map((category) => (
+                  <option key={category} value={category}>
+                    {category === "All"
+                      ? "📂 All"
+                      : `📁 ${category}`}
+                  </option>
+                ))}
+              </select>
+
+              {/* Category badge showing current selection */}
+              {selectedCategory !== "All" && (
+                <div className="bg-blue-100 text-blue-800 px-2 sm:px-4 py-1 sm:py-2 rounded-full text-xs sm:text-sm font-semibold flex items-center gap-1 flex-shrink-0">
+                  <span className="line-clamp-1">{selectedCategory}</span>
+                  <button
+                    onClick={() => setSelectedCategory("All")}
+                    className="text-blue-600 hover:text-blue-800 font-bold"
+                  >
+                    ✕
+                  </button>
+                </div>
+              )}
             </div>
 
             {/* Add Item Form */}
             {showAddForm && (
-              <div className="bg-white p-6 rounded-lg shadow mb-8">
-                <h2 className="text-xl font-semibold mb-4">
+              <div className="bg-white p-4 sm:p-6 rounded-lg shadow mb-6 sm:mb-8">
+                <h2 className="text-lg sm:text-xl font-semibold mb-4">
                   {editingId ? "Edit Item" : "Add New Item"}
                 </h2>
                 <form
@@ -356,16 +423,16 @@ const StoreDashboard = () => {
                     placeholder="Item Name *"
                     value={formData.itemName}
                     onChange={handleInputChange}
-                    className="border p-2 rounded col-span-2"
+                    className="border p-2 sm:p-3 rounded col-span-1 sm:col-span-2 text-sm sm:text-base"
                     required
                   />
-                  <input
-                    type="text"
+                  <textarea
                     name="description"
-                    placeholder="Description"
+                    placeholder="Description (optional) - Describe your product in detail"
                     value={formData.description}
                     onChange={handleInputChange}
-                    className="border p-2 rounded"
+                    rows="4"
+                    className="border p-2 sm:p-3 rounded col-span-1 sm:col-span-2 text-sm sm:text-base resize-none"
                   />
                   <input
                     type="number"
@@ -373,7 +440,7 @@ const StoreDashboard = () => {
                     placeholder="Price *"
                     value={formData.price}
                     onChange={handleInputChange}
-                    className="border p-2 rounded"
+                    className="border p-2 sm:p-3 rounded text-sm sm:text-base"
                     required
                   />
                   <input
@@ -382,7 +449,7 @@ const StoreDashboard = () => {
                     placeholder="Stock *"
                     value={formData.stock}
                     onChange={handleInputChange}
-                    className="border p-2 rounded"
+                    className="border p-2 sm:p-3 rounded text-sm sm:text-base"
                     required
                   />
                   <input
@@ -391,7 +458,7 @@ const StoreDashboard = () => {
                     placeholder="Category"
                     value={formData.category}
                     onChange={handleInputChange}
-                    className="border p-2 rounded"
+                    className="border p-2 sm:p-3 rounded text-sm sm:text-base"
                   />
                   <input
                     type="text"
@@ -399,12 +466,40 @@ const StoreDashboard = () => {
                     placeholder="SKU (Optional)"
                     value={formData.sku}
                     onChange={handleInputChange}
-                    className="border p-2 rounded"
+                    className="border p-2 sm:p-3 rounded text-sm sm:text-base"
+                  />
+                  <input
+                    type="text"
+                    name="image"
+                    placeholder="Image URL (Optional)"
+                    value={formData.image}
+                    onChange={handleInputChange}
+                    className="border p-2 sm:p-3 rounded col-span-1 sm:col-span-2 text-sm sm:text-base"
+                  />
+                  <input
+                    type="text"
+                    name="specifications"
+                    placeholder="Specifications (comma-separated, Optional)"
+                    value={
+                      Array.isArray(formData.specifications)
+                        ? formData.specifications.join(", ")
+                        : formData.specifications
+                    }
+                    onChange={(e) =>
+                      setFormData({
+                        ...formData,
+                        specifications: e.target.value
+                          .split(",")
+                          .map((s) => s.trim())
+                          .filter((s) => s),
+                      })
+                    }
+                    className="border p-2 sm:p-3 rounded col-span-1 sm:col-span-2 text-sm sm:text-base"
                   />
                   <button
                     type="submit"
                     disabled={loading}
-                    className="col-span-2 bg-blue-500 text-white p-2 rounded hover:bg-blue-600 disabled:bg-gray-400 transition cursor-pointer"
+                    className="col-span-1 sm:col-span-2 bg-blue-500 text-white p-2 sm:p-3 rounded hover:bg-blue-600 disabled:bg-gray-400 transition cursor-pointer text-sm sm:text-base font-medium"
                   >
                     {loading
                       ? "Saving..."
@@ -418,16 +513,16 @@ const StoreDashboard = () => {
 
             {/* Import Form */}
             {showImportForm && (
-              <div className="bg-white p-6 rounded-lg shadow mb-8">
-                <h2 className="text-xl font-semibold mb-4">
+              <div className="bg-white p-4 sm:p-6 rounded-lg shadow mb-6 sm:mb-8">
+                <h2 className="text-lg sm:text-xl font-semibold mb-4">
                   Import Items from Excel
                 </h2>
-                <div className="space-y-4">
-                  <div className="bg-blue-50 p-4 rounded border border-blue-200">
-                    <h3 className="font-semibold text-blue-900 mb-2">
+                <div className="space-y-3 sm:space-y-4">
+                  <div className="bg-blue-50 p-3 sm:p-4 rounded border border-blue-200">
+                    <h3 className="font-semibold text-blue-900 mb-2 text-sm sm:text-base">
                       📋 Supported Column Names:
                     </h3>
-                    <div className="grid grid-cols-2 gap-2 text-sm text-blue-800">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs sm:text-sm text-blue-800">
                       <div>
                         <strong>Item Name:</strong> Item Name, itemName, name,
                         Product Name
@@ -452,24 +547,28 @@ const StoreDashboard = () => {
                         <strong>SKU:</strong> SKU, sku, code, Product SKU
                         (optional)
                       </div>
+                      <div>
+                        <strong>Image:</strong> Image, image, Image URL, imageUrl
+                        (optional)
+                      </div>
                     </div>
                   </div>
 
-                  <p className="text-gray-600 text-sm">
+                  <p className="text-gray-600 text-xs sm:text-sm">
                     ✅ System will auto-generate SKU if not provided
                   </p>
-                  <p className="text-gray-600 text-sm">
+                  <p className="text-gray-600 text-xs sm:text-sm">
                     ✅ Works with any Excel format (XLSX, XLS, CSV)
                   </p>
-                  <p className="text-gray-600 text-sm">
+                  <p className="text-gray-600 text-xs sm:text-sm">
                     ✅ Duplicates will be handled automatically
                   </p>
 
                   <button
                     onClick={downloadTemplate}
-                    className="bg-green-500 text-white px-4 py-2 rounded hover:bg-green-600 transition cursor-pointer"
+                    className="bg-green-500 text-white px-3 sm:px-6 py-2 rounded hover:bg-green-600 transition cursor-pointer text-sm sm:text-base font-medium w-full sm:w-auto"
                   >
-                    📥 Download Template CSV
+                    📥 Download Template
                   </button>
 
                   <input
@@ -477,11 +576,11 @@ const StoreDashboard = () => {
                     accept=".xlsx,.xls,.csv,.ods"
                     onChange={handleFileUpload}
                     disabled={loading}
-                    className="border p-2 rounded w-full cursor-pointer"
+                    className="border p-2 sm:p-3 rounded w-full cursor-pointer text-sm"
                   />
 
                   {loading && (
-                    <div className="text-center text-blue-500">
+                    <div className="text-center text-blue-500 text-sm">
                       Importing items... Please wait
                     </div>
                   )}
@@ -493,72 +592,95 @@ const StoreDashboard = () => {
             <div className="bg-white rounded-lg shadow overflow-hidden">
               <div className="overflow-x-auto">
                 {loading && items.length === 0 ? (
-                  <div className="p-6 text-center text-gray-500">
+                  <div className="p-4 sm:p-6 text-center text-gray-500 text-sm sm:text-base">
                     Loading items...
                   </div>
                 ) : items.length === 0 ? (
-                  <div className="p-6 text-center text-gray-500">
+                  <div className="p-4 sm:p-6 text-center text-gray-500 text-sm sm:text-base">
                     No items added yet
+                  </div>
+                ) : getFilteredItems().length === 0 ? (
+                  <div className="p-4 sm:p-6 text-center text-gray-500 text-sm sm:text-base">
+                    No items in "{selectedCategory}" category
                   </div>
                 ) : (
                   <table className="w-full">
                     <thead className="bg-gray-100">
                       <tr>
-                        <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">
+                        <th className="px-2 sm:px-6 py-2 sm:py-3 text-left text-xs sm:text-sm font-semibold text-gray-900">
+                          Image
+                        </th>
+                        <th className="px-2 sm:px-6 py-2 sm:py-3 text-left text-xs sm:text-sm font-semibold text-gray-900">
                           Item Name
                         </th>
-                        <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">
+                        <th className="px-2 sm:px-6 py-2 sm:py-3 text-left text-xs sm:text-sm font-semibold text-gray-900">
                           Category
                         </th>
-                        <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">
+                        <th className="px-2 sm:px-6 py-2 sm:py-3 text-left text-xs sm:text-sm font-semibold text-gray-900">
                           Price
                         </th>
-                        <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">
+                        <th className="px-2 sm:px-6 py-2 sm:py-3 text-left text-xs sm:text-sm font-semibold text-gray-900">
                           Stock
                         </th>
-                        <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">
+                        <th className="px-2 sm:px-6 py-2 sm:py-3 text-left text-xs sm:text-sm font-semibold text-gray-900">
                           SKU
                         </th>
-                        <th className="px-6 py-3 text-left text-sm font-semibold text-gray-900">
+                        <th className="px-2 sm:px-6 py-2 sm:py-3 text-left text-xs sm:text-sm font-semibold text-gray-900">
+                          Description
+                        </th>
+                        <th className="px-2 sm:px-6 py-2 sm:py-3 text-left text-xs sm:text-sm font-semibold text-gray-900">
                           Actions
                         </th>
                       </tr>
                     </thead>
                     <tbody className="divide-y">
-                      {items.map((item) => (
+                      {getFilteredItems().map((item) => (
                         <tr key={item._id} className="hover:bg-gray-50">
-                          <td className="px-6 py-4 text-sm text-gray-900">
-                            {item.itemName}
+                          <td className="px-2 sm:px-6 py-2 sm:py-4 text-sm">
+                            {item.image ? (
+                              <img
+                                src={item.image}
+                                alt={item.itemName}
+                                className="h-10 w-10 sm:h-12 sm:w-12 rounded object-cover border"
+                              />
+                            ) : (
+                              <div className="h-10 w-10 sm:h-12 sm:w-12 rounded bg-gray-200 flex items-center justify-center text-xs text-gray-500">
+                                No img
+                              </div>
+                            )}
                           </td>
-                          <td className="px-6 py-4 text-sm text-gray-600">
-                            {item.category}
+                          <td className="px-2 sm:px-6 py-2 sm:py-4 text-xs sm:text-sm text-gray-900">
+                            <span className="line-clamp-1">{item.itemName}</span>
                           </td>
-                          <td className="px-6 py-4 text-sm font-semibold text-gray-900">
+                          <td className="px-2 sm:px-6 py-2 sm:py-4 text-xs sm:text-sm text-gray-600">
+                            <span className="line-clamp-1">{item.category}</span>
+                          </td>
+                          <td className="px-2 sm:px-6 py-2 sm:py-4 text-xs sm:text-sm font-semibold text-gray-900">
                             ${item.price.toFixed(2)}
                           </td>
-                          <td className="px-6 py-4 text-sm">
+                          <td className="px-2 sm:px-6 py-2 sm:py-4 text-xs sm:text-sm">
                             {editStockId === item._id ? (
-                              <div className="flex gap-2">
+                              <div className="flex gap-1 sm:gap-2 flex-wrap">
                                 <input
                                   type="number"
                                   value={editStockValue}
                                   onChange={(e) =>
                                     setEditStockValue(e.target.value)
                                   }
-                                  className="border p-1 rounded w-16"
+                                  className="border p-1 rounded w-14 sm:w-16 text-xs"
                                   autoFocus
                                 />
                                 <button
                                   onClick={() =>
                                     handleUpdateStock(item._id, editStockValue)
                                   }
-                                  className="bg-green-500 text-white px-2 py-1 rounded text-xs"
+                                  className="bg-green-500 text-white px-2 py-1 rounded text-xs whitespace-nowrap"
                                 >
                                   Save
                                 </button>
                                 <button
                                   onClick={() => setEditStockId(null)}
-                                  className="bg-gray-400 text-white px-2 py-1 rounded text-xs"
+                                  className="bg-gray-400 text-white px-2 py-1 rounded text-xs whitespace-nowrap"
                                 >
                                   Cancel
                                 </button>
@@ -569,7 +691,7 @@ const StoreDashboard = () => {
                                   setEditStockId(item._id);
                                   setEditStockValue(item.stock);
                                 }}
-                                className={`inline-block px-3 py-1 rounded-full text-xs font-semibold cursor-pointer ${getStockColor(
+                                className={`inline-block px-2 sm:px-3 py-1 rounded-full text-xs font-semibold cursor-pointer whitespace-nowrap ${getStockColor(
                                   item.stock,
                                 )}`}
                               >
@@ -577,19 +699,24 @@ const StoreDashboard = () => {
                               </div>
                             )}
                           </td>
-                          <td className="px-6 py-4 text-sm text-gray-600">
-                            {item.sku || "-"}
+                          <td className="px-2 sm:px-6 py-2 sm:py-4 text-xs sm:text-sm text-gray-600">
+                            <span className="line-clamp-1">{item.sku || "-"}</span>
                           </td>
-                          <td className="px-6 py-4 text-sm space-x-2">
+                          <td className="px-2 sm:px-6 py-2 sm:py-4 text-xs sm:text-sm text-gray-600">
+                            <span className="line-clamp-2" title={item.description}>
+                              {item.description || "No description"}
+                            </span>
+                          </td>
+                          <td className="px-2 sm:px-6 py-2 sm:py-4 text-xs sm:text-sm space-x-1 sm:space-x-2 flex flex-nowrap">
                             <button
                               onClick={() => handleEditItem(item)}
-                              className="text-blue-500 hover:text-blue-700 font-semibold"
+                              className="text-blue-500 hover:text-blue-700 font-semibold whitespace-nowrap"
                             >
                               Edit
                             </button>
                             <button
                               onClick={() => handleDeleteItem(item._id)}
-                              className="text-red-500 hover:text-red-700 font-semibold"
+                              className="text-red-500 hover:text-red-700 font-semibold whitespace-nowrap"
                             >
                               Delete
                             </button>
@@ -607,13 +734,13 @@ const StoreDashboard = () => {
         {/* ORDERS TAB */}
         {activeTab === "orders" && (
           <div className="bg-white rounded-lg shadow">
-            <div className="p-6">
+            <div className="p-4 sm:p-6">
               {loading ? (
-                <div className="text-center text-gray-500">
+                <div className="text-center text-gray-500 text-sm">
                   Loading orders...
                 </div>
               ) : orders.length === 0 ? (
-                <div className="text-center text-gray-500 py-8">
+                <div className="text-center text-gray-500 py-8 text-sm">
                   No orders yet
                 </div>
               ) : (
@@ -621,22 +748,22 @@ const StoreDashboard = () => {
                   <table className="w-full">
                     <thead className="bg-gray-100">
                       <tr>
-                        <th className="px-6 py-3 text-left text-sm font-semibold">
+                        <th className="px-2 sm:px-6 py-2 sm:py-3 text-left text-xs sm:text-sm font-semibold">
                           Order ID
                         </th>
-                        <th className="px-6 py-3 text-left text-sm font-semibold">
+                        <th className="px-2 sm:px-6 py-2 sm:py-3 text-left text-xs sm:text-sm font-semibold">
                           Client
                         </th>
-                        <th className="px-6 py-3 text-left text-sm font-semibold">
+                        <th className="px-2 sm:px-6 py-2 sm:py-3 text-left text-xs sm:text-sm font-semibold">
                           Amount
                         </th>
-                        <th className="px-6 py-3 text-left text-sm font-semibold">
+                        <th className="px-2 sm:px-6 py-2 sm:py-3 text-left text-xs sm:text-sm font-semibold">
                           Status
                         </th>
-                        <th className="px-6 py-3 text-left text-sm font-semibold">
+                        <th className="px-2 sm:px-6 py-2 sm:py-3 text-left text-xs sm:text-sm font-semibold">
                           Partner
                         </th>
-                        <th className="px-6 py-3 text-left text-sm font-semibold">
+                        <th className="px-2 sm:px-6 py-2 sm:py-3 text-left text-xs sm:text-sm font-semibold">
                           Date
                         </th>
                       </tr>
@@ -644,27 +771,27 @@ const StoreDashboard = () => {
                     <tbody className="divide-y">
                       {orders.map((order) => (
                         <tr key={order._id} className="hover:bg-gray-50">
-                          <td className="px-6 py-4 text-sm font-medium text-gray-900">
-                            {order.orderId}
+                          <td className="px-2 sm:px-6 py-2 sm:py-4 text-xs sm:text-sm font-medium text-gray-900">
+                            <span className="line-clamp-1">{order.orderId}</span>
                           </td>
-                          <td className="px-6 py-4 text-sm text-gray-600">
-                            {order.clientName}
+                          <td className="px-2 sm:px-6 py-2 sm:py-4 text-xs sm:text-sm text-gray-600">
+                            <span className="line-clamp-1">{order.clientName}</span>
                           </td>
-                          <td className="px-6 py-4 text-sm font-semibold">
+                          <td className="px-2 sm:px-6 py-2 sm:py-4 text-xs sm:text-sm font-semibold">
                             ${order.totalAmount.toFixed(2)}
                           </td>
-                          <td className="px-6 py-4 text-sm">
+                          <td className="px-2 sm:px-6 py-2 sm:py-4 text-xs sm:text-sm">
                             <span
-                              className={`px-3 py-1 rounded-full text-xs font-semibold ${getStatusColor(order.status)}`}
+                              className={`px-2 sm:px-3 py-1 rounded-full text-xs font-semibold inline-block whitespace-nowrap ${getStatusColor(order.status)}`}
                             >
                               {order.status.replace(/_/g, " ")}
                             </span>
                           </td>
-                          <td className="px-6 py-4 text-sm text-gray-600">
-                            {order.partnerName || "Unassigned"}
+                          <td className="px-2 sm:px-6 py-2 sm:py-4 text-xs sm:text-sm text-gray-600">
+                            <span className="line-clamp-1">{order.partnerName || "Unassigned"}</span>
                           </td>
-                          <td className="px-6 py-4 text-sm text-gray-600">
-                            {new Date(order.createdAt).toLocaleDateString()}
+                          <td className="px-2 sm:px-6 py-2 sm:py-4 text-xs sm:text-sm text-gray-600">
+                            <span className="line-clamp-1">{new Date(order.createdAt).toLocaleDateString()}</span>
                           </td>
                         </tr>
                       ))}
@@ -680,34 +807,34 @@ const StoreDashboard = () => {
         {activeTab === "deliveries" && (
           <div>
             {loading ? (
-              <div className="text-center text-gray-500 py-8">
+              <div className="text-center text-gray-500 py-8 text-sm">
                 Loading partners...
               </div>
             ) : partners.length === 0 ? (
-              <div className="bg-white rounded-lg shadow p-6 text-center text-gray-500">
+              <div className="bg-white rounded-lg shadow p-4 sm:p-6 text-center text-gray-500 text-sm">
                 No delivery partners yet
               </div>
             ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6">
                 {partners.map((partner) => (
                   <div
                     key={partner.id}
-                    className="bg-white rounded-lg shadow p-6"
+                    className="bg-white rounded-lg shadow p-4 sm:p-6"
                   >
-                    <h3 className="text-lg font-semibold text-gray-900 mb-2">
+                    <h3 className="text-base sm:text-lg font-semibold text-gray-900 mb-2 line-clamp-2">
                       {partner.name}
                     </h3>
-                    <div className="space-y-2 text-sm text-gray-600">
+                    <div className="space-y-1 sm:space-y-2 text-xs sm:text-sm text-gray-600">
                       <p>
-                        <strong>📞 Phone:</strong> {partner.phone}
+                        <strong>📞 Phone:</strong> <span className="line-clamp-1">{partner.phone}</span>
                       </p>
                       <p>
-                        <strong>📧 Email:</strong> {partner.email}
+                        <strong>📧 Email:</strong> <span className="line-clamp-1">{partner.email}</span>
                       </p>
                       <p>
-                        <strong>🚗 Vehicle:</strong> {partner.vehicle}
+                        <strong>🚗 Vehicle:</strong> <span className="line-clamp-1">{partner.vehicle}</span>
                       </p>
-                      <div className="border-t pt-3 mt-3">
+                      <div className="border-t pt-2 sm:pt-3 mt-2 sm:mt-3">
                         <p className="font-semibold text-gray-900">
                           Total Deliveries:{" "}
                           <span className="text-blue-600">

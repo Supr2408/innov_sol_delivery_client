@@ -188,3 +188,44 @@ export const createOrder = async (req, res) => {
     res.status(500).json({ message: error.message });
   }
 };
+
+// Get user's orders
+export const getUserOrders = async (req, res) => {
+  try {
+    const { userId } = req.params;
+
+    const orders = await orderModel
+      .find({ clientId: userId })
+      .sort({ createdAt: -1 })
+      .populate("partnerId", "name phone vehicle");
+
+    res.status(200).json({
+      message: "User orders retrieved successfully",
+      orders,
+    });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// Get user's tracking info (active deliveries)
+export const getUserTracking = async (req, res) => {
+  try {
+    const { userId } = req.params;
+
+    const tracking = await orderModel
+      .find({
+        clientId: userId,
+        status: { $in: ["pending", "shipped", "in_transit"] },
+      })
+      .sort({ createdAt: -1 })
+      .populate("partnerId", "name phone vehicle");
+
+    res.status(200).json({
+      message: "User tracking info retrieved",
+      tracking,
+    });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};

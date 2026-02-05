@@ -49,12 +49,12 @@ const PartnerLogin = () => {
   };
 
   return (
-    <div className="flex justify-center items-center min-h-screen bg-gray-100 py-8">
+    <div className="flex justify-center items-center min-h-screen bg-gray-100 px-4 py-8">
       <form
         onSubmit={onSubmitHandler}
-        className="bg-white p-8 rounded-lg shadow-md w-96"
+        className="bg-white p-6 sm:p-8 rounded-lg shadow-md w-full max-w-sm"
       >
-        <h2 className="text-2xl font-semibold text-center mb-2">
+        <h2 className="text-xl sm:text-2xl font-semibold text-center mb-4 sm:mb-6">
           {state === "Login" ? "Partner Login" : "Partner Registration"}
         </h2>
 
@@ -63,7 +63,7 @@ const PartnerLogin = () => {
             <input
               type="text"
               placeholder="Full Name"
-              className="w-full mb-3 p-2 border rounded"
+              className="w-full mb-2 sm:mb-3 p-2 sm:p-3 border rounded text-sm sm:text-base"
               value={name}
               onChange={(e) => setName(e.target.value)}
               required
@@ -72,7 +72,7 @@ const PartnerLogin = () => {
             <input
               type="tel"
               placeholder="Phone Number"
-              className="w-full mb-3 p-2 border rounded"
+              className="w-full mb-2 sm:mb-3 p-2 sm:p-3 border rounded text-sm sm:text-base"
               value={phone}
               onChange={(e) => setPhone(e.target.value)}
               required
@@ -81,7 +81,7 @@ const PartnerLogin = () => {
             <select
               value={vehicle}
               onChange={(e) => setVehicle(e.target.value)}
-              className="w-full mb-3 p-2 border rounded"
+              className="w-full mb-2 sm:mb-3 p-2 sm:p-3 border rounded text-sm sm:text-base"
               required
             >
               <option value="bike">Bike</option>
@@ -94,7 +94,7 @@ const PartnerLogin = () => {
         <input
           type="email"
           placeholder="Email"
-          className="w-full mb-3 p-2 border rounded"
+          className="w-full mb-2 sm:mb-3 p-2 sm:p-3 border rounded text-sm sm:text-base"
           value={email}
           onChange={(e) => setEmail(e.target.value)}
           required
@@ -103,31 +103,31 @@ const PartnerLogin = () => {
         <input
           type="password"
           placeholder="Password"
-          className="w-full mb-4 p-2 border rounded"
+          className="w-full mb-4 sm:mb-6 p-2 sm:p-3 border rounded text-sm sm:text-base"
           value={password}
           onChange={(e) => setPassword(e.target.value)}
           required
         />
 
-        <button className="w-full bg-blue-500 text-white py-2 rounded cursor-pointer hover:bg-blue-600 transition-colors">
+        <button className="w-full bg-blue-500 text-white py-2 sm:py-3 rounded cursor-pointer hover:bg-blue-600 transition-colors font-medium text-sm sm:text-base">
           {state === "Login" ? "Login" : "Create Account"}
         </button>
 
         {state === "Login" ? (
-          <p className="mt-4 text-center text-sm">
+          <p className="mt-4 text-center text-xs sm:text-sm">
             Don't have an account?{" "}
             <span
-              className="text-blue-500 cursor-pointer"
+              className="text-blue-500 cursor-pointer font-semibold hover:underline"
               onClick={() => setState("Register")}
             >
               Register
             </span>
           </p>
         ) : (
-          <p className="mt-4 text-center text-sm">
+          <p className="mt-4 text-center text-xs sm:text-sm">
             Already have an account?{" "}
             <span
-              className="text-blue-500 cursor-pointer"
+              className="text-blue-500 cursor-pointer font-semibold hover:underline"
               onClick={() => setState("Login")}
             >
               Login
