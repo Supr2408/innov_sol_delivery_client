@@ -16,6 +16,15 @@ const StoreLogin = () => {
   const [address, setAddress] = useState("");
   const [city, setCity] = useState("");
 
+  const resetForm = () => {
+    setStoreName("");
+    setEmail("");
+    setPassword("");
+    setPhone("");
+    setAddress("");
+    setCity("");
+  };
+
   const onSubmitHandler = async (e) => {
     e.preventDefault();
 
@@ -27,7 +36,7 @@ const StoreLogin = () => {
         });
 
         setToken(data.token);
-        setUser(data.user);
+        setUser({ ...data.user, role: "store" });
         localStorage.setItem("token", data.token);
 
         toast.success("Login successful");
@@ -43,7 +52,7 @@ const StoreLogin = () => {
         });
 
         toast.success("Registration successful. Please login.");
-        setState("Login");
+        resetForm();
       }
     } catch (error) {
       toast.error(error.response?.data?.message || "Something went wrong");
@@ -56,7 +65,7 @@ const StoreLogin = () => {
         onSubmit={onSubmitHandler}
         className="bg-white p-8 rounded-lg shadow-md w-96"
       >
-        <h2 className="text-2xl font-semibold text-center mb-2">
+        <h2 className="text-2xl font-semibold text-center mb-4 capitalize">
           {state === "Login" ? "Store Login" : "Store Registration"}
         </h2>
 
@@ -127,7 +136,10 @@ const StoreLogin = () => {
             Don't have an account?{" "}
             <span
               className="text-green-500 cursor-pointer"
-              onClick={() => setState("Register")}
+              onClick={() => {
+                setState("Register");
+                resetForm();
+              }}
             >
               Register
             </span>
@@ -137,7 +149,10 @@ const StoreLogin = () => {
             Already have an account?{" "}
             <span
               className="text-green-500 cursor-pointer"
-              onClick={() => setState("Login")}
+              onClick={() => {
+                setState("Login");
+                resetForm();
+              }}
             >
               Login
             </span>

@@ -14,38 +14,61 @@ import "react-toastify/dist/ReactToastify.css";
 import UserDashboard from "./pages/user/UserDashboard";
 import { AppContext } from "./context/AppContext";
 import UserNavbar from "./components/UserNavbar";
-
+import StoreNavbar from "./components/StoreNavbar";
+import ProtectedRoute from "./components/ProtectedRoute";
+import Unauthorized from "./pages/errors/Unauthorized";
+import NotFound from "./pages/errors/NotFound";
 
 const App = () => {
   const { isAuthenticated, userRole } = useContext(AppContext);
+
   return (
-    <div>
+    <div className="min-h-screen flex flex-col">
       <ToastContainer position="bottom-right" />
-      
-      {/* 🔁 NAVBAR DECISION */}
+
+      {/* NAVBAR */}
       {!isAuthenticated && <Navbar />}
-
       {isAuthenticated && userRole === "user" && <UserNavbar />}
+      {isAuthenticated && userRole === "store" && <StoreNavbar />}
 
-
-      <div>
+      {/* MAIN CONTENT */}
+      <main className="flex-grow">
         <Routes>
+          {/* PUBLIC */}
           <Route path="/" element={<Home />} />
-
-          <Route path="/admin-login" element={<AdminLogin />} />
           <Route path="/user-login" element={<UserLogin />} />
-          <Route path="/partner-login" element={<PartnerLogin />} />
           <Route path="/store-login" element={<StoreLogin />} />
-          
-          
+          <Route path="/admin-login" element={<AdminLogin />} />
+          <Route path="/partner-login" element={<PartnerLogin />} />
 
-          {/* Placeholder routes for dashboards */}
-          <Route path="/user-dashboard" element={<UserDashboard />} />
-          <Route path="/store-dashboard" element={<StoreDashboard />} />
+          {/* USER */}
+          <Route
+            path="/user-dashboard"
+            element={
+              <ProtectedRoute allowedRoles={["user"]}>
+                <UserDashboard />
+              </ProtectedRoute>
+            }
+          />
+
+          {/* STORE */}
+          <Route
+            path="/store-dashboard"
+            element={
+              <ProtectedRoute allowedRoles={["store"]}>
+                <StoreDashboard />
+              </ProtectedRoute>
+            }
+          />
+
+          {/* ERRORS */}
+          <Route path="/unauthorized" element={<Unauthorized />} />
+          <Route path="*" element={<NotFound />} />
         </Routes>
-      </div>
+      </main>
 
-      <Footer />
+      {/* FOOTER */}
+      {!isAuthenticated && <Footer />}
     </div>
   );
 };
