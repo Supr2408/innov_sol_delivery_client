@@ -10,9 +10,13 @@ const AppContextProvider = (props) => {
   const [token, setToken] = useState(localStorage.getItem("token"));
   const [user, setUser] = useState(null);
 
-  // attach token automatically to axios
+  // 🔑 derived auth state
+  const isAuthenticated = !!token;
+  const userRole = user?.role || null;
+
   useEffect(() => {
     axios.defaults.baseURL = backendUrl;
+
     if (token) {
       axios.defaults.headers.common["Authorization"] = `Bearer ${token}`;
     } else {
@@ -20,7 +24,6 @@ const AppContextProvider = (props) => {
     }
   }, [token]);
 
-  // OPTIONAL: load user from token (future ready)
   const logout = () => {
     localStorage.removeItem("token");
     setToken(null);
@@ -34,12 +37,16 @@ const AppContextProvider = (props) => {
     setToken,
     user,
     setUser,
+    isAuthenticated, // ✅ NEW
+    userRole,        // ✅ NEW
     logout,
   };
 
   return (
-      <AppContext.Provider value={value}>{props.children}</AppContext.Provider>
-    );
+    <AppContext.Provider value={value}>
+      {props.children}
+    </AppContext.Provider>
+  );
 };
 
 export default AppContextProvider;
