@@ -6,6 +6,7 @@ import AdminLogin from "./pages/auth/AdminLogin";
 import UserLogin from "./pages/auth/UserLogin";
 import PartnerLogin from "./pages/auth/PartnerLogin";
 import StoreLogin from "./pages/auth/StoreLogin";
+import StoreDashboard from "./pages/store/StoreDashboard";
 import Footer from "./components/Footer";
 
 import { ToastContainer } from "react-toastify";
@@ -13,6 +14,7 @@ import "react-toastify/dist/ReactToastify.css";
 import UserDashboard from "./pages/user/UserDashboard";
 import { AppContext } from "./context/AppContext";
 import UserNavbar from "./components/UserNavbar";
+
 
 const App = () => {
   const { isAuthenticated, userRole } = useContext(AppContext);
@@ -34,9 +36,12 @@ const App = () => {
           <Route path="/user-login" element={<UserLogin />} />
           <Route path="/partner-login" element={<PartnerLogin />} />
           <Route path="/store-login" element={<StoreLogin />} />
+          
+          
 
           {/* Placeholder routes for dashboards */}
           <Route path="/user-dashboard" element={<UserDashboard />} />
+          <Route path="/store-dashboard" element={<StoreDashboard />} />
         </Routes>
       </div>
 
