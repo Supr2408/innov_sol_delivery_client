@@ -1,116 +1,190 @@
-import React, { useContext, useState } from "react";
-import { useNavigate } from "react-router-dom";
-import axios from "axios";
-import { toast } from "react-toastify";
-import { AppContext } from "../../context/AppContext";
+import React, { useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 
 const UserLogin = () => {
-  const navigate = useNavigate();
-  const { setToken, setUser } = useContext(AppContext);
+  const navigate = useNavigate()
+  const [mode, setMode] = useState('login')
+  const [name, setName] = useState('')
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+  const [error, setError] = useState('')
+  const [success, setSuccess] = useState('')
 
-  const [state, setState] = useState("Login");
-  const [name, setName] = useState("");
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
+  const handleSubmit = (event) => {
+    event.preventDefault()
+    const normalizedEmail = email.trim().toLowerCase()
+    const trimmedName = name.trim()
+    const storedUsers = JSON.parse(localStorage.getItem('clientUsers') || '[]')
 
-  const onSubmitHandler = async (e) => {
-    e.preventDefault();
-
-    try {
-      if (state === "Login") {
-        const { data } = await axios.post("/users/login", {
-          email,
-          password,
-        });
-
-        setToken(data.token);
-        setUser(data.user);
-        localStorage.setItem("token", data.token);
-
-        toast.success("Login successful");
-        navigate("/");
-      } else {
-        await axios.post("/users/register", {
-          name,
-          email,
-          password,
-        });
-
-        toast.success("Registration successful. Please login.");
-        setState("Login");
+    if (mode === 'register') {
+      if (!trimmedName) {
+        setSuccess('')
+        setError('Please enter your full name.')
+        return
       }
-    } catch (error) {
-      toast.error(error.response?.data?.message || "Something went wrong");
+
+      const userExists = storedUsers.some(
+        (user) => user.email.toLowerCase() === normalizedEmail
+      )
+
+      if (userExists) {
+        setSuccess('')
+        setError('That email is already registered. Please login instead.')
+        return
+      }
+
+      const updatedUsers = [
+        ...storedUsers,
+        {
+          name: trimmedName,
+          email: normalizedEmail,
+          password
+        }
+      ]
+
+      localStorage.setItem('clientUsers', JSON.stringify(updatedUsers))
+      setError('')
+      setSuccess('Registration successful. Please login.')
+      setMode('login')
+      return
     }
-  };
+
+    const matchedUser = storedUsers.find(
+      (user) => user.email.toLowerCase() === normalizedEmail && user.password === password
+    )
+
+    if (normalizedEmail === 'user@demo.com' && password === 'client123') {
+      localStorage.setItem('clientAuth', 'true')
+      localStorage.setItem(
+        'clientUser',
+        JSON.stringify({ name: 'Demo Client', email: normalizedEmail })
+      )
+      setError('')
+      setSuccess('')
+      navigate('/client-dashboard')
+      return
+    }
+
+    if (matchedUser) {
+      localStorage.setItem('clientAuth', 'true')
+      localStorage.setItem(
+        'clientUser',
+        JSON.stringify({ name: matchedUser.name, email: matchedUser.email })
+      )
+      setError('')
+      setSuccess('')
+      navigate('/client-dashboard')
+      return
+    }
+
+    setSuccess('')
+    setError('Invalid credentials. Try user@demo.com / client123 or register.')
+  }
 
   return (
-    <div className="flex justify-center items-center h-screen bg-gray-100">
-      <form
-        onSubmit={onSubmitHandler}
-        className="bg-white p-8 rounded-lg shadow-md w-96"
-      >
-        <h2 className="text-2xl font-semibold text-center mb-2">
-          {state}
-        </h2>
+    <div className="px-6 py-16 flex justify-center">
+      <div className="w-full max-w-md rounded-2xl border border-gray-200 p-6 shadow-sm">
+        <h1 className="text-2xl font-semibold">
+          {mode === 'login' ? 'Client Login' : 'Create Client Account'}
+        </h1>
+        <p className="text-sm text-gray-500 mt-2">
+          Demo credentials: user@demo.com / client123
+        </p>
 
-        {state !== "Login" && (
-          <input
-            type="text"
-            placeholder="Full Name"
-            className="w-full mb-3 p-2 border rounded"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            required
-          />
-        )}
+        <form className="mt-6 space-y-4" onSubmit={handleSubmit}>
+          {mode === 'register' && (
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-gray-700" htmlFor="user-name">
+                Full name
+              </label>
+              <input
+                id="user-name"
+                type="text"
+                className="w-full rounded-lg border border-gray-300 px-4 py-2 focus:outline-none focus:ring-2 focus:ring-red-500"
+                placeholder="Jane Doe"
+                value={name}
+                onChange={(event) => setName(event.target.value)}
+                required
+              />
+            </div>
+          )}
+          <div className="space-y-2">
+            <label className="text-sm font-medium text-gray-700" htmlFor="user-email">
+              Email
+            </label>
+            <input
+              id="user-email"
+              type="email"
+              className="w-full rounded-lg border border-gray-300 px-4 py-2 focus:outline-none focus:ring-2 focus:ring-red-500"
+              placeholder="user@demo.com"
+              value={email}
+              onChange={(event) => setEmail(event.target.value)}
+              required
+            />
+          </div>
 
-        <input
-          type="email"
-          placeholder="Email"
-          className="w-full mb-3 p-2 border rounded"
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-          required
-        />
+          <div className="space-y-2">
+            <label className="text-sm font-medium text-gray-700" htmlFor="user-password">
+              Password
+            </label>
+            <input
+              id="user-password"
+              type="password"
+              className="w-full rounded-lg border border-gray-300 px-4 py-2 focus:outline-none focus:ring-2 focus:ring-red-500"
+              placeholder="client123"
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+              required
+            />
+          </div>
 
-        <input
-          type="password"
-          placeholder="Password"
-          className="w-full mb-4 p-2 border rounded"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          required
-        />
+          {error && <p className="text-sm text-red-500">{error}</p>}
+          {success && <p className="text-sm text-green-600">{success}</p>}
 
-        <button className="w-full bg-red-500 text-white py-2 rounded cursor-pointer hover:bg-red-600 transition-colors">
-          {state === "Login" ? "Login" : "Create Account"}
-        </button>
+          <button
+            className="w-full rounded-lg bg-red-500 py-2 text-white font-semibold"
+            type="submit"
+          >
+            {mode === 'login' ? 'Sign in' : 'Create account'}
+          </button>
+        </form>
 
-        {state === "Login" ? (
-          <p className="mt-4 text-center text-sm">
-            Don’t have an account?{" "}
-            <span
-              className="text-red-500 cursor-pointer"
-              onClick={() => setState("Register")}
-            >
-              Register
-            </span>
-          </p>
-        ) : (
-          <p className="mt-4 text-center text-sm">
-            Already have an account?{" "}
-            <span
-              className="text-red-500 cursor-pointer"
-              onClick={() => setState("Login")}
-            >
-              Login
-            </span>
-          </p>
-        )}
-      </form>
+        <div className="mt-4 text-center text-sm text-gray-600">
+          {mode === 'login' ? (
+            <>
+              Don&apos;t have an account?{' '}
+              <button
+                type="button"
+                className="font-semibold text-red-500 hover:text-red-600"
+                onClick={() => {
+                  setMode('register')
+                  setError('')
+                  setSuccess('')
+                }}
+              >
+                Register
+              </button>
+            </>
+          ) : (
+            <>
+              Already have an account?{' '}
+              <button
+                type="button"
+                className="font-semibold text-red-500 hover:text-red-600"
+                onClick={() => {
+                  setMode('login')
+                  setError('')
+                  setSuccess('')
+                }}
+              >
+                Login
+              </button>
+            </>
+          )}
+        </div>
+      </div>
     </div>
-  );
-};
+  )
+}
 
-export default UserLogin;
+export default UserLogin

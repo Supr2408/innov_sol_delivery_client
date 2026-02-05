@@ -23,6 +23,20 @@ const Home = () => {
           🛵 Fast Delivery Partners
         </div>
       </div>
+      <div className="mt-10 flex flex-wrap gap-4">
+        <a
+          className="px-5 py-2 rounded-full bg-red-500 text-white font-semibold shadow"
+          href="/user-login"
+        >
+          User Login
+        </a>
+        <a
+          className="px-5 py-2 rounded-full border border-red-500 text-red-500 font-semibold"
+          href="/partner-login"
+        >
+          Partner Login
+        </a>
+      </div>
     </div>
   );
 };
