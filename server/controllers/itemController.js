@@ -130,6 +130,14 @@ export const importItemsFromExcel = async (req, res) => {
       return res.status(400).json({ message: "Excel file is empty" });
     }
 
+    const parsePriceValue = (value) => {
+      if (value === undefined || value === null || value === "") return 0;
+      if (typeof value === "number") return value;
+      const numeric = String(value).replace(/[^0-9.-]/g, "");
+      const parsed = parseFloat(numeric);
+      return Number.isFinite(parsed) ? parsed : 0;
+    };
+
     // Flexible column mapping - accept various column names
     const normalizeHeaders = (row) => ({
       itemName:
@@ -149,15 +157,18 @@ export const importItemsFromExcel = async (req, res) => {
         row.Desc ||
         row["Product Description"] ||
         "",
-      price:
-        parseFloat(
-          row.Price ||
-            row.price ||
-            row.PRICE ||
-            row["Unit Price"] ||
-            row.unitPrice ||
-            0
-        ) || 0,
+      price: parsePriceValue(
+        row.Price ||
+          row.price ||
+          row.PRICE ||
+          row["Unit Price"] ||
+          row["Unit Price (₹)"] ||
+          row["Unit Price(₹)"] ||
+          row["Unit Price (Rs)"] ||
+          row["Unit Price (INR)"] ||
+          row.unitPrice ||
+          0
+      ),
       stock:
         parseInt(
           row.Stock ||
@@ -179,6 +190,10 @@ export const importItemsFromExcel = async (req, res) => {
         row.sku ||
         row.Sku ||
         row["Product SKU"] ||
+        row["Item ID"] ||
+        row["Item Id"] ||
+        row.itemId ||
+        row.itemID ||
         row.code ||
         row.Code ||
         null,
@@ -245,7 +260,23 @@ export const importItemsFromExcel = async (req, res) => {
         .json({ message: "No valid items found in the file" });
     }
 
+    const generatedSkus = new Set();
+    const getGeneratedSku = (baseName, index) => {
+      const base = baseName
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/(^-|-$)/g, "")
+        .slice(0, 20);
+      let candidate = `SKU-${base || "item"}-${Date.now()}-${index}`;
+      while (generatedSkus.has(candidate)) {
+        candidate = `SKU-${base || "item"}-${Date.now()}-${index + 1}`;
+      }
+      generatedSkus.add(candidate);
+      return candidate;
+    };
+
     // Check for existing items in database and update quantities instead of creating duplicates
+    let index = 0;
     for (const itemToInsert of dedupedItems.values()) {
       const matchQuery = itemToInsert.sku
         ? { storeId, sku: itemToInsert.sku }
@@ -274,9 +305,13 @@ export const importItemsFromExcel = async (req, res) => {
           )
         );
       } else {
+        if (!itemToInsert.sku || String(itemToInsert.sku).trim() === "") {
+          itemToInsert.sku = getGeneratedSku(itemToInsert.itemName, index);
+        }
         // New item - prepare for insertion
         itemsToInsert.push(itemToInsert);
       }
+      index += 1;
     }
 
     // Execute updates
