@@ -60,6 +60,7 @@ export const loginPartner = async (req, res) => {
         email: existingPartner.email,
         phone: existingPartner.phone,
         vehicle: existingPartner.vehicle,
+        role: "partner",
       },
     });
   } catch (error) {

@@ -2,6 +2,9 @@ import React, { useContext, useEffect, useState } from "react";
 import { AppContext } from "../../context/AppContext";
 import axios from "axios";
 import { toast } from "react-toastify";
+import Swal from "sweetalert2";
+import ItemModal from "../../components/ItemModal";
+import { FiEdit2, FiTrash2 } from "react-icons/fi";
 
 const StoreDashboard = () => {
   const { user } = useContext(AppContext);
@@ -11,9 +14,11 @@ const StoreDashboard = () => {
   const [partners, setPartners] = useState([]);
   const [showAddForm, setShowAddForm] = useState(false);
   const [showImportForm, setShowImportForm] = useState(false);
+  const [showItemModal, setShowItemModal] = useState(false);
   const [loading, setLoading] = useState(false);
   const [editStockId, setEditStockId] = useState(null);
   const [editStockValue, setEditStockValue] = useState("");
+  const [selectedItemIds, setSelectedItemIds] = useState([]);
 
   const [formData, setFormData] = useState({
     itemName: "",
@@ -41,6 +46,12 @@ const StoreDashboard = () => {
       }
     }
   }, [user, activeTab]);
+
+  useEffect(() => {
+    setSelectedItemIds((prev) =>
+      prev.filter((id) => items.some((item) => item._id === id)),
+    );
+  }, [items]);
 
   const fetchItems = async () => {
     try {
@@ -117,7 +128,7 @@ const StoreDashboard = () => {
         image: "",
         specifications: [],
       });
-      setShowAddForm(false);
+      setShowItemModal(false);
       fetchItems();
     } catch (error) {
       toast.error(error.response?.data?.message || "Failed to save item");
@@ -157,21 +168,106 @@ const StoreDashboard = () => {
       specifications: item.specifications || [],
     });
     setEditingId(item._id);
-    setShowAddForm(true);
+    setShowItemModal(true);
   };
 
   const handleDeleteItem = async (itemId) => {
-    if (window.confirm("Are you sure you want to delete this item?")) {
+    const result = await Swal.fire({
+      title: "Delete Item?",
+      text: "This action cannot be undone. Are you sure you want to delete this item?",
+      icon: "warning",
+      showCancelButton: true,
+      confirmButtonColor: "#ef4444",
+      cancelButtonColor: "#6b7280",
+      confirmButtonText: "Yes, delete it!",
+      cancelButtonText: "Cancel",
+      customClass: {
+        confirmButton: "cursor-pointer",
+        cancelButton: "cursor-pointer",
+      },
+    });
+
+    if (result.isConfirmed) {
       try {
         setLoading(true);
         await axios.delete(`/items/${itemId}`);
         toast.success("Item deleted successfully");
         fetchItems();
+        Swal.fire("Deleted!", "Item has been deleted successfully.", "success");
       } catch (error) {
         toast.error("Failed to delete item");
+        Swal.fire("Error!", "Failed to delete the item.", "error");
       } finally {
         setLoading(false);
       }
+    }
+  };
+
+  const handleToggleSelectItem = (itemId) => {
+    setSelectedItemIds((prev) =>
+      prev.includes(itemId)
+        ? prev.filter((id) => id !== itemId)
+        : [...prev, itemId],
+    );
+  };
+
+  const handleToggleSelectAll = (filteredItems) => {
+    const filteredIds = filteredItems.map((item) => item._id);
+    const allSelected =
+      filteredIds.length > 0 &&
+      filteredIds.every((id) => selectedItemIds.includes(id));
+
+    setSelectedItemIds((prev) => {
+      if (allSelected) {
+        return prev.filter((id) => !filteredIds.includes(id));
+      }
+      const combined = new Set([...prev, ...filteredIds]);
+      return Array.from(combined);
+    });
+  };
+
+  const handleBulkDelete = async (filteredItems) => {
+    if (selectedItemIds.length === 0) return;
+
+    const selectedItems = filteredItems.filter((item) =>
+      selectedItemIds.includes(item._id),
+    );
+
+    const result = await Swal.fire({
+      title: `Delete ${selectedItems.length} Item(s)?`,
+      text: "This action cannot be undone. Are you sure you want to delete the selected items?",
+      icon: "warning",
+      showCancelButton: true,
+      confirmButtonColor: "#ef4444",
+      cancelButtonColor: "#6b7280",
+      confirmButtonText: "Yes, delete them!",
+      cancelButtonText: "Cancel",
+      customClass: {
+        confirmButton: "cursor-pointer",
+        cancelButton: "cursor-pointer",
+      },
+    });
+
+    if (!result.isConfirmed) return;
+
+    try {
+      setLoading(true);
+      await Promise.all(
+        selectedItems.map((item) => axios.delete(`/items/${item._id}`)),
+      );
+      toast.success("Selected items deleted successfully");
+      setSelectedItemIds([]);
+      fetchItems();
+      Swal.fire(
+        "Deleted!",
+        "Selected items have been deleted successfully.",
+        "success",
+      );
+    } catch (error) {
+      toast.error("Failed to delete selected items");
+      Swal.fire("Error!", "Failed to delete the selected items.", "error");
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -295,6 +391,11 @@ const StoreDashboard = () => {
   };
 
   const firstName = user?.storeName?.split(" ")[0];
+  const filteredItems = getFilteredItems();
+  const selectedCount = selectedItemIds.length;
+  const allFilteredSelected =
+    filteredItems.length > 0 &&
+    filteredItems.every((item) => selectedItemIds.includes(item._id));
 
   if (!user || !user.id) {
     return (
@@ -355,7 +456,7 @@ const StoreDashboard = () => {
             <div className="flex gap-2 sm:gap-4 mb-6 sm:mb-8 items-center flex-wrap">
               <button
                 onClick={() => {
-                  setShowAddForm(!showAddForm);
+                  setShowItemModal(true);
                   setEditingId(null);
                   setFormData({
                     itemName: "",
@@ -365,11 +466,12 @@ const StoreDashboard = () => {
                     category: "General",
                     sku: "",
                     image: "",
+                    specifications: [],
                   });
                 }}
                 className="bg-blue-500 text-white px-3 sm:px-6 py-2 rounded hover:bg-blue-600 transition cursor-pointer text-sm sm:text-base font-medium"
               >
-                {showAddForm ? "Cancel" : "+ Add"}
+                + Add Item
               </button>
               <button
                 onClick={() => setShowImportForm(!showImportForm)}
@@ -377,6 +479,14 @@ const StoreDashboard = () => {
               >
                 {showImportForm ? "Cancel" : "📥 Import"}
               </button>
+              {selectedCount > 0 && (
+                <button
+                  onClick={() => handleBulkDelete(filteredItems)}
+                  className="bg-red-500 text-white px-3 sm:px-6 py-2 rounded hover:bg-red-600 transition cursor-pointer text-sm sm:text-base font-medium"
+                >
+                  🗑️ Delete Selected ({selectedCount})
+                </button>
+              )}
 
               {/* Category Filter Dropdown */}
               <select
@@ -399,7 +509,7 @@ const StoreDashboard = () => {
                   <span className="line-clamp-1">{selectedCategory}</span>
                   <button
                     onClick={() => setSelectedCategory("All")}
-                    className="text-blue-600 hover:text-blue-800 font-bold"
+                    className="text-blue-600 hover:text-blue-800 font-bold cursor-pointer"
                   >
                     ✕
                   </button>
@@ -407,109 +517,16 @@ const StoreDashboard = () => {
               )}
             </div>
 
-            {/* Add Item Form */}
-            {showAddForm && (
-              <div className="bg-white p-4 sm:p-6 rounded-lg shadow mb-6 sm:mb-8">
-                <h2 className="text-lg sm:text-xl font-semibold mb-4">
-                  {editingId ? "Edit Item" : "Add New Item"}
-                </h2>
-                <form
-                  onSubmit={handleAddItem}
-                  className="grid grid-cols-2 gap-4"
-                >
-                  <input
-                    type="text"
-                    name="itemName"
-                    placeholder="Item Name *"
-                    value={formData.itemName}
-                    onChange={handleInputChange}
-                    className="border p-2 sm:p-3 rounded col-span-1 sm:col-span-2 text-sm sm:text-base"
-                    required
-                  />
-                  <textarea
-                    name="description"
-                    placeholder="Description (optional) - Describe your product in detail"
-                    value={formData.description}
-                    onChange={handleInputChange}
-                    rows="4"
-                    className="border p-2 sm:p-3 rounded col-span-1 sm:col-span-2 text-sm sm:text-base resize-none"
-                  />
-                  <input
-                    type="number"
-                    name="price"
-                    placeholder="Price *"
-                    value={formData.price}
-                    onChange={handleInputChange}
-                    className="border p-2 sm:p-3 rounded text-sm sm:text-base"
-                    required
-                  />
-                  <input
-                    type="number"
-                    name="stock"
-                    placeholder="Stock *"
-                    value={formData.stock}
-                    onChange={handleInputChange}
-                    className="border p-2 sm:p-3 rounded text-sm sm:text-base"
-                    required
-                  />
-                  <input
-                    type="text"
-                    name="category"
-                    placeholder="Category"
-                    value={formData.category}
-                    onChange={handleInputChange}
-                    className="border p-2 sm:p-3 rounded text-sm sm:text-base"
-                  />
-                  <input
-                    type="text"
-                    name="sku"
-                    placeholder="SKU (Optional)"
-                    value={formData.sku}
-                    onChange={handleInputChange}
-                    className="border p-2 sm:p-3 rounded text-sm sm:text-base"
-                  />
-                  <input
-                    type="text"
-                    name="image"
-                    placeholder="Image URL (Optional)"
-                    value={formData.image}
-                    onChange={handleInputChange}
-                    className="border p-2 sm:p-3 rounded col-span-1 sm:col-span-2 text-sm sm:text-base"
-                  />
-                  <input
-                    type="text"
-                    name="specifications"
-                    placeholder="Specifications (comma-separated, Optional)"
-                    value={
-                      Array.isArray(formData.specifications)
-                        ? formData.specifications.join(", ")
-                        : formData.specifications
-                    }
-                    onChange={(e) =>
-                      setFormData({
-                        ...formData,
-                        specifications: e.target.value
-                          .split(",")
-                          .map((s) => s.trim())
-                          .filter((s) => s),
-                      })
-                    }
-                    className="border p-2 sm:p-3 rounded col-span-1 sm:col-span-2 text-sm sm:text-base"
-                  />
-                  <button
-                    type="submit"
-                    disabled={loading}
-                    className="col-span-1 sm:col-span-2 bg-blue-500 text-white p-2 sm:p-3 rounded hover:bg-blue-600 disabled:bg-gray-400 transition cursor-pointer text-sm sm:text-base font-medium"
-                  >
-                    {loading
-                      ? "Saving..."
-                      : editingId
-                        ? "Update Item"
-                        : "Add Item"}
-                  </button>
-                </form>
-              </div>
-            )}
+            {/* Item Modal */}
+            <ItemModal
+              isOpen={showItemModal}
+              onClose={() => setShowItemModal(false)}
+              onSubmit={handleAddItem}
+              formData={formData}
+              onInputChange={handleInputChange}
+              editingId={editingId}
+              loading={loading}
+            />
 
             {/* Import Form */}
             {showImportForm && (
@@ -607,6 +624,15 @@ const StoreDashboard = () => {
                   <table className="w-full">
                     <thead className="bg-gray-100">
                       <tr>
+                        <th className="px-2 sm:px-6 py-2 sm:py-3 text-left">
+                          <input
+                            type="checkbox"
+                            checked={allFilteredSelected}
+                            onChange={() => handleToggleSelectAll(filteredItems)}
+                            className="h-4 w-4 cursor-pointer"
+                            aria-label="Select all items"
+                          />
+                        </th>
                         <th className="px-2 sm:px-6 py-2 sm:py-3 text-left text-xs sm:text-sm font-semibold text-gray-900">
                           Image
                         </th>
@@ -634,8 +660,17 @@ const StoreDashboard = () => {
                       </tr>
                     </thead>
                     <tbody className="divide-y">
-                      {getFilteredItems().map((item) => (
+                      {filteredItems.map((item) => (
                         <tr key={item._id} className="hover:bg-gray-50">
+                          <td className="px-2 sm:px-6 py-2 sm:py-4 text-sm">
+                            <input
+                              type="checkbox"
+                              checked={selectedItemIds.includes(item._id)}
+                              onChange={() => handleToggleSelectItem(item._id)}
+                              className="h-4 w-4 cursor-pointer"
+                              aria-label={`Select ${item.itemName}`}
+                            />
+                          </td>
                           <td className="px-2 sm:px-6 py-2 sm:py-4 text-sm">
                             {item.image ? (
                               <img
@@ -707,18 +742,20 @@ const StoreDashboard = () => {
                               {item.description || "No description"}
                             </span>
                           </td>
-                          <td className="px-2 sm:px-6 py-2 sm:py-4 text-xs sm:text-sm space-x-1 sm:space-x-2 flex flex-nowrap">
+                          <td className="px-2 sm:px-6 py-2 sm:py-4 text-xs sm:text-sm space-x-1 sm:space-x-2 flex flex-nowrap items-center">
                             <button
                               onClick={() => handleEditItem(item)}
-                              className="text-blue-500 hover:text-blue-700 font-semibold whitespace-nowrap"
+                              className="text-blue-500 hover:text-blue-700 transition cursor-pointer p-1.5 rounded hover:bg-blue-50 flex items-center justify-center"
+                              title="Edit item"
                             >
-                              Edit
+                              <FiEdit2 size={18} />
                             </button>
                             <button
                               onClick={() => handleDeleteItem(item._id)}
-                              className="text-red-500 hover:text-red-700 font-semibold whitespace-nowrap"
+                              className="text-red-500 hover:text-red-700 transition cursor-pointer p-1.5 rounded hover:bg-red-50 flex items-center justify-center"
+                              title="Delete item"
                             >
-                              Delete
+                              <FiTrash2 size={18} />
                             </button>
                           </td>
                         </tr>

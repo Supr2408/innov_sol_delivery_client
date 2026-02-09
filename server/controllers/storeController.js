@@ -61,6 +61,8 @@ export const loginStore = async (req, res) => {
         email: existingStore.email,
         phone: existingStore.phone,
         city: existingStore.city,
+        address: existingStore.address,
+        role: "store",
       },
     });
   } catch (error) {

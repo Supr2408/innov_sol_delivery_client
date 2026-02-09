@@ -53,6 +53,7 @@ export const loginUser = async (req, res) => {
         id: existingUser._id,
         name: existingUser.name,
         email: existingUser.email,
+        role: "user",
       },
     });
   } catch (error) {

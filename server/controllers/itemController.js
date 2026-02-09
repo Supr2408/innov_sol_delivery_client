@@ -130,6 +130,14 @@ export const importItemsFromExcel = async (req, res) => {
       return res.status(400).json({ message: "Excel file is empty" });
     }
 
+    const parsePriceValue = (value) => {
+      if (value === undefined || value === null || value === "") return 0;
+      if (typeof value === "number") return value;
+      const numeric = String(value).replace(/[^0-9.-]/g, "");
+      const parsed = parseFloat(numeric);
+      return Number.isFinite(parsed) ? parsed : 0;
+    };
+
     // Flexible column mapping - accept various column names
     const normalizeHeaders = (row) => ({
       itemName:
@@ -149,15 +157,18 @@ export const importItemsFromExcel = async (req, res) => {
         row.Desc ||
         row["Product Description"] ||
         "",
-      price:
-        parseFloat(
-          row.Price ||
-            row.price ||
-            row.PRICE ||
-            row["Unit Price"] ||
-            row.unitPrice ||
-            0
-        ) || 0,
+      price: parsePriceValue(
+        row.Price ||
+          row.price ||
+          row.PRICE ||
+          row["Unit Price"] ||
+          row["Unit Price (₹)"] ||
+          row["Unit Price(₹)"] ||
+          row["Unit Price (Rs)"] ||
+          row["Unit Price (INR)"] ||
+          row.unitPrice ||
+          0
+      ),
       stock:
         parseInt(
           row.Stock ||
@@ -179,6 +190,10 @@ export const importItemsFromExcel = async (req, res) => {
         row.sku ||
         row.Sku ||
         row["Product SKU"] ||
+        row["Item ID"] ||
+        row["Item Id"] ||
+        row.itemId ||
+        row.itemID ||
         row.code ||
         row.Code ||
         null,
@@ -199,8 +214,10 @@ export const importItemsFromExcel = async (req, res) => {
     });
 
     // Process and deduplicate items
-    const skuSet = new Set();
+    const dedupedItems = new Map();
+    const itemsToUpdate = [];
     const itemsToInsert = [];
+    let successCount = 0;
 
     for (let i = 0; i < rawData.length; i++) {
       const normalizedRow = normalizeHeaders(rawData[i]);
@@ -210,68 +227,110 @@ export const importItemsFromExcel = async (req, res) => {
         continue;
       }
 
-      // Generate unique SKU if not provided
-      let sku = normalizedRow.sku;
-      if (!sku) {
-        sku = `SKU-${storeId}-${Date.now()}-${i}`;
+      const itemName = normalizedRow.itemName.toString().trim();
+      const category = normalizedRow.category.toString().trim();
+      const sku = normalizedRow.sku ? normalizedRow.sku.toString().trim() : null;
+      const dedupeKey = sku
+        ? `sku:${sku}`
+        : `name:${itemName.toLowerCase()}|category:${category.toLowerCase()}`;
+
+      if (dedupedItems.has(dedupeKey)) {
+        const existingItem = dedupedItems.get(dedupeKey);
+        existingItem.stock += normalizedRow.stock;
+        dedupedItems.set(dedupeKey, existingItem);
+        continue;
       }
 
-      // Check for duplicates within the file
-      if (skuSet.has(sku)) {
-        // Generate unique SKU for duplicate
-        sku = `${sku}-${i}`;
-      }
-
-      skuSet.add(sku);
-
-      itemsToInsert.push({
+      dedupedItems.set(dedupeKey, {
         storeId,
-        itemName: normalizedRow.itemName.toString().trim(),
+        itemName,
         description: normalizedRow.description.toString().trim(),
         price: normalizedRow.price,
         stock: normalizedRow.stock,
-        category: normalizedRow.category.toString().trim(),
-        sku: sku,
+        category,
+        sku,
         image: normalizedRow.image.toString().trim(),
         specifications: normalizedRow.specifications,
       });
     }
 
-    if (itemsToInsert.length === 0) {
+    if (dedupedItems.size === 0) {
       return res
         .status(400)
         .json({ message: "No valid items found in the file" });
     }
 
-    // Insert items with ordered: false to allow partial success
-    try {
-      const result = await itemModel.insertMany(itemsToInsert, {
-        ordered: false,
-      });
-
-      res.status(201).json({
-        message: `${result.length} items imported successfully`,
-        importedCount: result.length,
-        totalRows: itemsToInsert.length,
-        items: result,
-      });
-    } catch (insertError) {
-      // If there are write errors, still return successful items
-      if (insertError.writeErrors && insertError.writeErrors.length > 0) {
-        const successCount = insertError.insertedIds ? insertError.insertedIds.length : 0;
-        res.status(207).json({
-          message: `${successCount} items imported successfully. ${insertError.writeErrors.length} items failed due to duplicate SKU.`,
-          importedCount: successCount,
-          failedCount: insertError.writeErrors.length,
-          errors: insertError.writeErrors.map((err) => ({
-            index: err.index,
-            message: err.error.message,
-          })),
-        });
-      } else {
-        throw insertError;
+    const generatedSkus = new Set();
+    const getGeneratedSku = (baseName, index) => {
+      const base = baseName
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/(^-|-$)/g, "")
+        .slice(0, 20);
+      let candidate = `SKU-${base || "item"}-${Date.now()}-${index}`;
+      while (generatedSkus.has(candidate)) {
+        candidate = `SKU-${base || "item"}-${Date.now()}-${index + 1}`;
       }
+      generatedSkus.add(candidate);
+      return candidate;
+    };
+
+    // Check for existing items in database and update quantities instead of creating duplicates
+    let index = 0;
+    for (const itemToInsert of dedupedItems.values()) {
+      const matchQuery = itemToInsert.sku
+        ? { storeId, sku: itemToInsert.sku }
+        : { storeId, itemName: itemToInsert.itemName, category: itemToInsert.category };
+
+      const existingItem = await itemModel.findOne(matchQuery);
+
+      if (existingItem) {
+        // Item with same SKU already exists - update quantity
+        itemsToUpdate.push(
+          itemModel.findByIdAndUpdate(
+            existingItem._id,
+            {
+              $inc: { stock: itemToInsert.stock }, // Increment stock
+              $set: {
+                itemName: itemToInsert.itemName,
+                description: itemToInsert.description,
+                price: itemToInsert.price,
+                category: itemToInsert.category,
+                image: itemToInsert.image,
+                specifications: itemToInsert.specifications,
+                ...(itemToInsert.sku ? { sku: itemToInsert.sku } : {}),
+              },
+            },
+            { new: true }
+          )
+        );
+      } else {
+        if (!itemToInsert.sku || String(itemToInsert.sku).trim() === "") {
+          itemToInsert.sku = getGeneratedSku(itemToInsert.itemName, index);
+        }
+        // New item - prepare for insertion
+        itemsToInsert.push(itemToInsert);
+      }
+      index += 1;
     }
+
+    // Execute updates
+    const updatedItems = await Promise.all(itemsToUpdate);
+
+    // Insert new items
+    const insertedItems = itemsToInsert.length
+      ? await itemModel.insertMany(itemsToInsert, { ordered: false })
+      : [];
+
+    successCount = updatedItems.length + insertedItems.length;
+
+    res.status(201).json({
+      message: `Import completed: ${successCount} items processed`,
+      importedCount: successCount,
+      newItems: insertedItems.length,
+      updatedItems: updatedItems.length,
+      items: [...updatedItems, ...insertedItems],
+    });
   } catch (error) {
     console.error("Import error:", error);
     res.status(500).json({
@@ -354,4 +413,3 @@ export const getAllSpecifications = async (req, res) => {
     res.status(500).json({ message: error.message });
   }
 };
-
