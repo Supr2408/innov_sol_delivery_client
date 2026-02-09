@@ -18,6 +18,7 @@ const StoreDashboard = () => {
   const [loading, setLoading] = useState(false);
   const [editStockId, setEditStockId] = useState(null);
   const [editStockValue, setEditStockValue] = useState("");
+  const [selectedItemIds, setSelectedItemIds] = useState([]);
 
   const [formData, setFormData] = useState({
     itemName: "",
@@ -45,6 +46,12 @@ const StoreDashboard = () => {
       }
     }
   }, [user, activeTab]);
+
+  useEffect(() => {
+    setSelectedItemIds((prev) =>
+      prev.filter((id) => items.some((item) => item._id === id)),
+    );
+  }, [items]);
 
   const fetchItems = async () => {
     try {
@@ -196,6 +203,74 @@ const StoreDashboard = () => {
     }
   };
 
+  const handleToggleSelectItem = (itemId) => {
+    setSelectedItemIds((prev) =>
+      prev.includes(itemId)
+        ? prev.filter((id) => id !== itemId)
+        : [...prev, itemId],
+    );
+  };
+
+  const handleToggleSelectAll = (filteredItems) => {
+    const filteredIds = filteredItems.map((item) => item._id);
+    const allSelected =
+      filteredIds.length > 0 &&
+      filteredIds.every((id) => selectedItemIds.includes(id));
+
+    setSelectedItemIds((prev) => {
+      if (allSelected) {
+        return prev.filter((id) => !filteredIds.includes(id));
+      }
+      const combined = new Set([...prev, ...filteredIds]);
+      return Array.from(combined);
+    });
+  };
+
+  const handleBulkDelete = async (filteredItems) => {
+    if (selectedItemIds.length === 0) return;
+
+    const selectedItems = filteredItems.filter((item) =>
+      selectedItemIds.includes(item._id),
+    );
+
+    const result = await Swal.fire({
+      title: `Delete ${selectedItems.length} Item(s)?`,
+      text: "This action cannot be undone. Are you sure you want to delete the selected items?",
+      icon: "warning",
+      showCancelButton: true,
+      confirmButtonColor: "#ef4444",
+      cancelButtonColor: "#6b7280",
+      confirmButtonText: "Yes, delete them!",
+      cancelButtonText: "Cancel",
+      customClass: {
+        confirmButton: "cursor-pointer",
+        cancelButton: "cursor-pointer",
+      },
+    });
+
+    if (!result.isConfirmed) return;
+
+    try {
+      setLoading(true);
+      await Promise.all(
+        selectedItems.map((item) => axios.delete(`/items/${item._id}`)),
+      );
+      toast.success("Selected items deleted successfully");
+      setSelectedItemIds([]);
+      fetchItems();
+      Swal.fire(
+        "Deleted!",
+        "Selected items have been deleted successfully.",
+        "success",
+      );
+    } catch (error) {
+      toast.error("Failed to delete selected items");
+      Swal.fire("Error!", "Failed to delete the selected items.", "error");
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleFileUpload = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -316,6 +391,11 @@ const StoreDashboard = () => {
   };
 
   const firstName = user?.storeName?.split(" ")[0];
+  const filteredItems = getFilteredItems();
+  const selectedCount = selectedItemIds.length;
+  const allFilteredSelected =
+    filteredItems.length > 0 &&
+    filteredItems.every((item) => selectedItemIds.includes(item._id));
 
   if (!user || !user.id) {
     return (
@@ -399,6 +479,14 @@ const StoreDashboard = () => {
               >
                 {showImportForm ? "Cancel" : "📥 Import"}
               </button>
+              {selectedCount > 0 && (
+                <button
+                  onClick={() => handleBulkDelete(filteredItems)}
+                  className="bg-red-500 text-white px-3 sm:px-6 py-2 rounded hover:bg-red-600 transition cursor-pointer text-sm sm:text-base font-medium"
+                >
+                  🗑️ Delete Selected ({selectedCount})
+                </button>
+              )}
 
               {/* Category Filter Dropdown */}
               <select
@@ -536,6 +624,15 @@ const StoreDashboard = () => {
                   <table className="w-full">
                     <thead className="bg-gray-100">
                       <tr>
+                        <th className="px-2 sm:px-6 py-2 sm:py-3 text-left">
+                          <input
+                            type="checkbox"
+                            checked={allFilteredSelected}
+                            onChange={() => handleToggleSelectAll(filteredItems)}
+                            className="h-4 w-4 cursor-pointer"
+                            aria-label="Select all items"
+                          />
+                        </th>
                         <th className="px-2 sm:px-6 py-2 sm:py-3 text-left text-xs sm:text-sm font-semibold text-gray-900">
                           Image
                         </th>
@@ -563,8 +660,17 @@ const StoreDashboard = () => {
                       </tr>
                     </thead>
                     <tbody className="divide-y">
-                      {getFilteredItems().map((item) => (
+                      {filteredItems.map((item) => (
                         <tr key={item._id} className="hover:bg-gray-50">
+                          <td className="px-2 sm:px-6 py-2 sm:py-4 text-sm">
+                            <input
+                              type="checkbox"
+                              checked={selectedItemIds.includes(item._id)}
+                              onChange={() => handleToggleSelectItem(item._id)}
+                              className="h-4 w-4 cursor-pointer"
+                              aria-label={`Select ${item.itemName}`}
+                            />
+                          </td>
                           <td className="px-2 sm:px-6 py-2 sm:py-4 text-sm">
                             {item.image ? (
                               <img

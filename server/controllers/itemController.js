@@ -199,9 +199,9 @@ export const importItemsFromExcel = async (req, res) => {
     });
 
     // Process and deduplicate items
-    const skuSet = new Set();
-    const itemsToInsert = [];
+    const dedupedItems = new Map();
     const itemsToUpdate = [];
+    const itemsToInsert = [];
     let successCount = 0;
 
     for (let i = 0; i < rawData.length; i++) {
@@ -212,49 +212,46 @@ export const importItemsFromExcel = async (req, res) => {
         continue;
       }
 
-      // Generate unique SKU if not provided
-      let sku = normalizedRow.sku;
-      if (!sku) {
-        sku = `SKU-${storeId}-${Date.now()}-${i}`;
-      }
+      const itemName = normalizedRow.itemName.toString().trim();
+      const category = normalizedRow.category.toString().trim();
+      const sku = normalizedRow.sku ? normalizedRow.sku.toString().trim() : null;
+      const dedupeKey = sku
+        ? `sku:${sku}`
+        : `name:${itemName.toLowerCase()}|category:${category.toLowerCase()}`;
 
-      // Check for duplicates within the file
-      if (skuSet.has(sku)) {
-        // For duplicates within the file, increase quantity instead of creating duplicate
-        const existingItem = itemsToInsert.find((item) => item.sku === sku);
-        if (existingItem) {
-          existingItem.stock += normalizedRow.stock;
-        }
+      if (dedupedItems.has(dedupeKey)) {
+        const existingItem = dedupedItems.get(dedupeKey);
+        existingItem.stock += normalizedRow.stock;
+        dedupedItems.set(dedupeKey, existingItem);
         continue;
       }
 
-      skuSet.add(sku);
-
-      itemsToInsert.push({
+      dedupedItems.set(dedupeKey, {
         storeId,
-        itemName: normalizedRow.itemName.toString().trim(),
+        itemName,
         description: normalizedRow.description.toString().trim(),
         price: normalizedRow.price,
         stock: normalizedRow.stock,
-        category: normalizedRow.category.toString().trim(),
-        sku: sku,
+        category,
+        sku,
         image: normalizedRow.image.toString().trim(),
         specifications: normalizedRow.specifications,
       });
     }
 
-    if (itemsToInsert.length === 0) {
+    if (dedupedItems.size === 0) {
       return res
         .status(400)
         .json({ message: "No valid items found in the file" });
     }
 
     // Check for existing items in database and update quantities instead of creating duplicates
-    for (const itemToInsert of itemsToInsert) {
-      const existingItem = await itemModel.findOne({
-        storeId,
-        sku: itemToInsert.sku,
-      });
+    for (const itemToInsert of dedupedItems.values()) {
+      const matchQuery = itemToInsert.sku
+        ? { storeId, sku: itemToInsert.sku }
+        : { storeId, itemName: itemToInsert.itemName, category: itemToInsert.category };
+
+      const existingItem = await itemModel.findOne(matchQuery);
 
       if (existingItem) {
         // Item with same SKU already exists - update quantity
@@ -263,14 +260,22 @@ export const importItemsFromExcel = async (req, res) => {
             existingItem._id,
             {
               $inc: { stock: itemToInsert.stock }, // Increment stock
+              $set: {
+                itemName: itemToInsert.itemName,
+                description: itemToInsert.description,
+                price: itemToInsert.price,
+                category: itemToInsert.category,
+                image: itemToInsert.image,
+                specifications: itemToInsert.specifications,
+                ...(itemToInsert.sku ? { sku: itemToInsert.sku } : {}),
+              },
             },
             { new: true }
           )
         );
       } else {
         // New item - prepare for insertion
-        const newItem = new itemModel(itemToInsert);
-        itemsToInsert[itemsToInsert.indexOf(itemToInsert)] = newItem;
+        itemsToInsert.push(itemToInsert);
       }
     }
 
@@ -278,10 +283,9 @@ export const importItemsFromExcel = async (req, res) => {
     const updatedItems = await Promise.all(itemsToUpdate);
 
     // Insert new items
-    const insertedItems = await itemModel.insertMany(
-      itemsToInsert.filter((item) => item instanceof itemModel === false),
-      { ordered: false }
-    );
+    const insertedItems = itemsToInsert.length
+      ? await itemModel.insertMany(itemsToInsert, { ordered: false })
+      : [];
 
     successCount = updatedItems.length + insertedItems.length;
 
@@ -374,4 +378,3 @@ export const getAllSpecifications = async (req, res) => {
     res.status(500).json({ message: error.message });
   }
 };
-
