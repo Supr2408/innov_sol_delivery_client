@@ -4,6 +4,7 @@ import axios from "axios";
 import { toast } from "react-toastify";
 import Swal from "sweetalert2";
 import ItemModal from "../../components/ItemModal";
+import { FiEdit2, FiTrash2 } from "react-icons/fi";
 
 const StoreDashboard = () => {
   const { user } = useContext(AppContext);
@@ -635,18 +636,20 @@ const StoreDashboard = () => {
                               {item.description || "No description"}
                             </span>
                           </td>
-                          <td className="px-2 sm:px-6 py-2 sm:py-4 text-xs sm:text-sm space-x-1 sm:space-x-2 flex flex-nowrap">
+                          <td className="px-2 sm:px-6 py-2 sm:py-4 text-xs sm:text-sm space-x-1 sm:space-x-2 flex flex-nowrap items-center">
                             <button
                               onClick={() => handleEditItem(item)}
-                              className="text-blue-500 hover:text-blue-700 font-semibold whitespace-nowrap cursor-pointer"
+                              className="text-blue-500 hover:text-blue-700 transition cursor-pointer p-1.5 rounded hover:bg-blue-50 flex items-center justify-center"
+                              title="Edit item"
                             >
-                              Edit
+                              <FiEdit2 size={18} />
                             </button>
                             <button
                               onClick={() => handleDeleteItem(item._id)}
-                              className="text-red-500 hover:text-red-700 font-semibold whitespace-nowrap cursor-pointer"
+                              className="text-red-500 hover:text-red-700 transition cursor-pointer p-1.5 rounded hover:bg-red-50 flex items-center justify-center"
+                              title="Delete item"
                             >
-                              Delete
+                              <FiTrash2 size={18} />
                             </button>
                           </td>
                         </tr>
