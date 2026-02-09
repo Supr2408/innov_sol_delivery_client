@@ -201,6 +201,8 @@ export const importItemsFromExcel = async (req, res) => {
     // Process and deduplicate items
     const skuSet = new Set();
     const itemsToInsert = [];
+    const itemsToUpdate = [];
+    let successCount = 0;
 
     for (let i = 0; i < rawData.length; i++) {
       const normalizedRow = normalizeHeaders(rawData[i]);
@@ -218,8 +220,12 @@ export const importItemsFromExcel = async (req, res) => {
 
       // Check for duplicates within the file
       if (skuSet.has(sku)) {
-        // Generate unique SKU for duplicate
-        sku = `${sku}-${i}`;
+        // For duplicates within the file, increase quantity instead of creating duplicate
+        const existingItem = itemsToInsert.find((item) => item.sku === sku);
+        if (existingItem) {
+          existingItem.stock += normalizedRow.stock;
+        }
+        continue;
       }
 
       skuSet.add(sku);
@@ -243,35 +249,49 @@ export const importItemsFromExcel = async (req, res) => {
         .json({ message: "No valid items found in the file" });
     }
 
-    // Insert items with ordered: false to allow partial success
-    try {
-      const result = await itemModel.insertMany(itemsToInsert, {
-        ordered: false,
+    // Check for existing items in database and update quantities instead of creating duplicates
+    for (const itemToInsert of itemsToInsert) {
+      const existingItem = await itemModel.findOne({
+        storeId,
+        sku: itemToInsert.sku,
       });
 
-      res.status(201).json({
-        message: `${result.length} items imported successfully`,
-        importedCount: result.length,
-        totalRows: itemsToInsert.length,
-        items: result,
-      });
-    } catch (insertError) {
-      // If there are write errors, still return successful items
-      if (insertError.writeErrors && insertError.writeErrors.length > 0) {
-        const successCount = insertError.insertedIds ? insertError.insertedIds.length : 0;
-        res.status(207).json({
-          message: `${successCount} items imported successfully. ${insertError.writeErrors.length} items failed due to duplicate SKU.`,
-          importedCount: successCount,
-          failedCount: insertError.writeErrors.length,
-          errors: insertError.writeErrors.map((err) => ({
-            index: err.index,
-            message: err.error.message,
-          })),
-        });
+      if (existingItem) {
+        // Item with same SKU already exists - update quantity
+        itemsToUpdate.push(
+          itemModel.findByIdAndUpdate(
+            existingItem._id,
+            {
+              $inc: { stock: itemToInsert.stock }, // Increment stock
+            },
+            { new: true }
+          )
+        );
       } else {
-        throw insertError;
+        // New item - prepare for insertion
+        const newItem = new itemModel(itemToInsert);
+        itemsToInsert[itemsToInsert.indexOf(itemToInsert)] = newItem;
       }
     }
+
+    // Execute updates
+    const updatedItems = await Promise.all(itemsToUpdate);
+
+    // Insert new items
+    const insertedItems = await itemModel.insertMany(
+      itemsToInsert.filter((item) => item instanceof itemModel === false),
+      { ordered: false }
+    );
+
+    successCount = updatedItems.length + insertedItems.length;
+
+    res.status(201).json({
+      message: `Import completed: ${successCount} items processed`,
+      importedCount: successCount,
+      newItems: insertedItems.length,
+      updatedItems: updatedItems.length,
+      items: [...updatedItems, ...insertedItems],
+    });
   } catch (error) {
     console.error("Import error:", error);
     res.status(500).json({

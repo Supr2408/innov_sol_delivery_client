@@ -127,8 +127,24 @@ const UserDashboard = () => {
   }, [searchQuery, items, selectedStore, selectedCategory, selectedSpecification]);
 
   // Filter items by category and specifications
+  // Deduplicate items by SKU and filter out items with no stock
+  const deduplicateItems = (itemsToFilter) => {
+    const seen = new Set();
+    return itemsToFilter.filter((item) => {
+      const sku = item.sku || item._id; // Use SKU or fallback to _id
+      // Only include items that are in stock and haven't been seen yet
+      if (item.stock > 0 && !seen.has(sku)) {
+        seen.add(sku);
+        return true;
+      }
+      return false;
+    });
+  };
+
   const filterByCategory = (itemsToFilter) => {
-    let filtered = itemsToFilter;
+    // First deduplicate items
+    let deduped = deduplicateItems(itemsToFilter);
+    let filtered = deduped;
     
     // Filter by category
     if (selectedCategory !== "All") {
@@ -166,7 +182,9 @@ const UserDashboard = () => {
         category: selectedCategory === "All" ? "" : selectedCategory,
       });
       const { data } = await axios.get(`/items/search/global?${query}`);
-      setFilteredItems(data.items || []);
+      // Apply deduplication and stock filtering to search results
+      const deduped = deduplicateItems(data.items || []);
+      setFilteredItems(deduped);
     } catch (error) {
       toast.error("Global search failed");
       setFilteredItems([]);
@@ -184,7 +202,9 @@ const UserDashboard = () => {
         category: selectedCategory,
       });
       const { data } = await axios.get(`/items/search/global?${query}`);
-      setFilteredItems(data.items || []);
+      // Apply deduplication and stock filtering to category results
+      const deduped = deduplicateItems(data.items || []);
+      setFilteredItems(deduped);
     } catch (error) {
       console.log("Category browse failed:", error);
       setFilteredItems([]);
@@ -585,17 +605,6 @@ const UserDashboard = () => {
                           <span className="text-lg font-bold text-blue-600">
                             ${item.price.toFixed(2)}
                           </span>
-                          <span
-                            className={`px-2 py-1 rounded text-xs font-semibold whitespace-nowrap ${
-                              item.stock > 10
-                                ? "bg-green-100 text-green-800"
-                                : item.stock > 0
-                                  ? "bg-yellow-100 text-yellow-800"
-                                  : "bg-red-100 text-red-800"
-                            }`}
-                          >
-                            {item.stock > 0 ? `${item.stock}` : "Out"}
-                          </span>
                         </div>
                       </div>
                     </div>
@@ -674,21 +683,10 @@ const UserDashboard = () => {
                           </div>
                         )}
 
-                        {/* Price and Stock */}
-                        <div className="flex justify-between items-center mb-3 gap-2">
+                        {/* Price */}
+                        <div className="mb-3 gap-2">
                           <span className="text-xl sm:text-2xl font-bold text-blue-600">
                             ${item.price.toFixed(2)}
-                          </span>
-                          <span
-                            className={`px-2 py-1 rounded text-xs font-semibold whitespace-nowrap ${
-                              item.stock > 10
-                                ? "bg-green-100 text-green-800"
-                                : item.stock > 0
-                                  ? "bg-yellow-100 text-yellow-800"
-                                  : "bg-red-100 text-red-800"
-                            }`}
-                          >
-                            {item.stock > 0 ? `${item.stock}` : "Out"}
                           </span>
                         </div>
 
@@ -698,7 +696,7 @@ const UserDashboard = () => {
                           disabled={item.stock === 0}
                           className="w-full bg-blue-500 text-white py-2 rounded hover:bg-blue-600 transition disabled:bg-gray-400 disabled:cursor-not-allowed cursor-pointer text-sm sm:text-base font-medium"
                         >
-                          {item.stock > 0 ? "🛒 Add" : "Out"}
+                          🛒 Add to Cart
                         </button>
                       </div>
                     </div>
@@ -768,24 +766,6 @@ const UserDashboard = () => {
                     <p className="text-3xl font-bold text-blue-600">
                       ${selectedItemDetails.price.toFixed(2)}
                     </p>
-                  </div>
-
-                  {/* Stock */}
-                  <div>
-                    <p className="text-sm text-gray-600">Available Stock</p>
-                    <span
-                      className={`inline-block px-3 py-1 rounded font-semibold ${
-                        selectedItemDetails.stock > 10
-                          ? "bg-green-100 text-green-800"
-                          : selectedItemDetails.stock > 0
-                            ? "bg-yellow-100 text-yellow-800"
-                            : "bg-red-100 text-red-800"
-                      }`}
-                    >
-                      {selectedItemDetails.stock > 0
-                        ? `${selectedItemDetails.stock} items`
-                        : "Out of Stock"}
-                    </span>
                   </div>
 
                   {/* Description */}
