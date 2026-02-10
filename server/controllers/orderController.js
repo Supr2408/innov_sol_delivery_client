@@ -1,4 +1,100 @@
 import orderModel from "../models/orderModel.js";
+import partnerModel from "../models/partnerModel.js";
+import { getIO } from "../socket.js";
+
+const ORDER_STATUS = {
+  RECEIVED: "pending",
+  PREPARING: "confirmed",
+  PARTNER_ASSIGNED: "shipped",
+  OUT_FOR_DELIVERY: "in_transit",
+  DELIVERED: "delivered",
+  CANCELLED: "cancelled",
+};
+
+const STATUS_FLOW = [
+  ORDER_STATUS.RECEIVED,
+  ORDER_STATUS.PREPARING,
+  ORDER_STATUS.PARTNER_ASSIGNED,
+  ORDER_STATUS.OUT_FOR_DELIVERY,
+  ORDER_STATUS.DELIVERED,
+];
+
+const syncPartnerAvailability = async (partnerId) => {
+  if (!partnerId) return;
+
+  const hasActiveJobs = await orderModel.exists({
+    partnerId,
+    status: {
+      $in: [ORDER_STATUS.PARTNER_ASSIGNED, ORDER_STATUS.OUT_FOR_DELIVERY],
+    },
+  });
+
+  await partnerModel.findByIdAndUpdate(partnerId, {
+    isAvailable: !Boolean(hasActiveJobs),
+  });
+};
+
+const isValidStatusTransition = (currentStatus, nextStatus) => {
+  if (nextStatus === ORDER_STATUS.CANCELLED) return currentStatus !== ORDER_STATUS.DELIVERED;
+
+  const currentIndex = STATUS_FLOW.indexOf(currentStatus);
+  const nextIndex = STATUS_FLOW.indexOf(nextStatus);
+
+  if (currentIndex === -1 || nextIndex === -1) return false;
+
+  return nextIndex === currentIndex + 1;
+};
+
+const emitOrderStatus = (order) => {
+  const io = getIO();
+
+  io.to(`store:${order.storeId}`).emit("order:store:updated", {
+    orderId: order._id,
+    status: order.status,
+    order,
+  });
+
+  io.to(`user:${order.clientId}`).emit("order:user:tracking", {
+    orderId: order._id,
+    status: order.status,
+    progressFlow: STATUS_FLOW,
+    order,
+  });
+
+  if (order.partnerId) {
+    io.to(`partner:${order.partnerId}`).emit("order:partner:updated", {
+      orderId: order._id,
+      status: order.status,
+      order,
+    });
+  }
+};
+
+const emitPartnerJobPoolAlert = (order, radiusInKm = 10) => {
+  const io = getIO();
+  const storeName =
+    typeof order.storeId === "object" && order.storeId?.storeName
+      ? order.storeId.storeName
+      : order.storeId;
+
+  io.to("partners:pool").emit("partner:job:new", {
+    title: "New Delivery Available",
+    message: `Pickup from ${storeName} within ${radiusInKm}km radius`,
+    order,
+    radiusInKm,
+  });
+};
+
+const autoAssignPartner = async () => {
+  const availablePartners = await partnerModel.find({ isAvailable: true }).select("_id");
+
+  if (!availablePartners.length) {
+    return null;
+  }
+
+  const randomIndex = Math.floor(Math.random() * availablePartners.length);
+  return availablePartners[randomIndex]._id;
+};
 
 // Get all orders for a store
 export const getStoreOrders = async (req, res) => {
@@ -24,9 +120,7 @@ export const getOrdersByStatus = async (req, res) => {
   try {
     const { storeId, status } = req.params;
 
-    const orders = await orderModel
-      .find({ storeId, status })
-      .sort({ createdAt: -1 });
+    const orders = await orderModel.find({ storeId, status }).sort({ createdAt: -1 });
 
     res.status(200).json({
       message: `${status} orders retrieved successfully`,
@@ -43,7 +137,6 @@ export const getDeliveryPartners = async (req, res) => {
   try {
     const { storeId } = req.params;
 
-    // Get all unique partners who have delivered items from this store
     const orders = await orderModel
       .find({
         storeId,
@@ -51,29 +144,30 @@ export const getDeliveryPartners = async (req, res) => {
       })
       .populate("partnerId", "name email phone vehicle");
 
-    // Extract unique partners with stats
     const partnersMap = new Map();
 
     orders.forEach((order) => {
-      if (order.partnerId) {
-        const key = order.partnerId._id.toString();
-        if (!partnersMap.has(key)) {
-          partnersMap.set(key, {
-            id: order.partnerId._id,
-            name: order.partnerId.name,
-            email: order.partnerId.email,
-            phone: order.partnerId.phone,
-            vehicle: order.partnerId.vehicle,
-            totalDeliveries: 0,
-            totalAmount: 0,
-          });
-        }
+      if (!order.partnerId) return;
 
-        const partner = partnersMap.get(key);
-        if (order.status === "delivered") {
-          partner.totalDeliveries += 1;
-          partner.totalAmount += order.totalAmount;
-        }
+      const key = order.partnerId._id.toString();
+
+      if (!partnersMap.has(key)) {
+        partnersMap.set(key, {
+          id: order.partnerId._id,
+          name: order.partnerId.name,
+          email: order.partnerId.email,
+          phone: order.partnerId.phone,
+          vehicle: order.partnerId.vehicle,
+          totalDeliveries: 0,
+          totalAmount: 0,
+        });
+      }
+
+      const partner = partnersMap.get(key);
+
+      if (order.status === ORDER_STATUS.DELIVERED) {
+        partner.totalDeliveries += 1;
+        partner.totalAmount += order.totalAmount;
       }
     });
 
@@ -94,7 +188,6 @@ export const getStockSummary = async (req, res) => {
   try {
     const { storeId } = req.params;
 
-    // Get all orders and calculate stock changes
     const orders = await orderModel.find({ storeId });
 
     const stockChanges = {};
@@ -102,6 +195,7 @@ export const getStockSummary = async (req, res) => {
     orders.forEach((order) => {
       order.items.forEach((item) => {
         const key = item.itemId.toString();
+
         if (!stockChanges[key]) {
           stockChanges[key] = {
             itemName: item.itemName,
@@ -112,7 +206,7 @@ export const getStockSummary = async (req, res) => {
 
         stockChanges[key].totalOrdered += item.quantity;
 
-        if (order.status === "delivered") {
+        if (order.status === ORDER_STATUS.DELIVERED) {
           stockChanges[key].totalDelivered += item.quantity;
         }
       });
@@ -127,62 +221,142 @@ export const getStockSummary = async (req, res) => {
   }
 };
 
-// Update order status
+// Update order status with enterprise status flow
 export const updateOrderStatus = async (req, res) => {
   try {
     const { orderId } = req.params;
-    const { status, partnerId, estimatedDelivery } = req.body;
+    const { status, partnerId, estimatedDelivery, proofOfDeliveryImage } = req.body;
 
-    const order = await orderModel.findByIdAndUpdate(
-      orderId,
-      {
-        status,
-        partnerId: partnerId || order?.partnerId,
-        estimatedDelivery,
-        ...(status === "delivered" && { deliveredAt: new Date() }),
-        ...(status === "shipped" && { shippedAt: new Date() }),
-      },
-      { new: true }
-    );
+    const order = await orderModel.findById(orderId);
 
     if (!order) {
       return res.status(404).json({ message: "Order not found" });
     }
 
-    res.status(200).json({
+    if (!isValidStatusTransition(order.status, status)) {
+      return res.status(400).json({
+        message: `Invalid status transition from ${order.status} to ${status}`,
+      });
+    }
+
+    const updates = {
+      status,
+      estimatedDelivery,
+    };
+
+    if (status === ORDER_STATUS.PARTNER_ASSIGNED) {
+      const selectedPartner = partnerId;
+
+      if (!selectedPartner) {
+        return res.status(400).json({
+          message: "partnerId is required to assign this order",
+        });
+      }
+
+      updates.partnerId = selectedPartner;
+      updates.shippedAt = new Date();
+    }
+
+    if (status === ORDER_STATUS.DELIVERED) {
+      updates.deliveredAt = new Date();
+      updates.actualDelivery = new Date();
+      if (proofOfDeliveryImage) updates.proofOfDeliveryImage = proofOfDeliveryImage;
+    }
+
+    const updatedOrder = await orderModel
+      .findByIdAndUpdate(orderId, updates, { new: true })
+      .populate("partnerId", "name phone vehicle")
+      .populate("storeId", "storeName address city phone");
+
+    if (status === ORDER_STATUS.PREPARING) {
+      emitPartnerJobPoolAlert(updatedOrder, 8);
+    }
+
+    if (status === ORDER_STATUS.PARTNER_ASSIGNED && updatedOrder.partnerId?._id) {
+      await syncPartnerAvailability(updatedOrder.partnerId._id);
+    }
+
+    if (
+      (status === ORDER_STATUS.DELIVERED || status === ORDER_STATUS.CANCELLED) &&
+      updatedOrder.partnerId?._id
+    ) {
+      await syncPartnerAvailability(updatedOrder.partnerId._id);
+    }
+
+    emitOrderStatus(updatedOrder);
+
+    return res.status(200).json({
       message: "Order status updated successfully",
-      order,
+      order: updatedOrder,
+      lifecycle: STATUS_FLOW,
     });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    return res.status(500).json({ message: error.message });
   }
 };
 
 // Create order (for testing/demo)
 export const createOrder = async (req, res) => {
   try {
-    const { storeId, clientId, items, totalAmount, deliveryAddress, clientName, clientPhone } = req.body;
+    const { storeId: routeStoreId } = req.params;
+    const {
+      storeId: bodyStoreId,
+      clientId,
+      items,
+      totalAmount,
+      deliveryAddress,
+      customerLocation,
+      clientName,
+      clientPhone,
+    } = req.body;
 
-    // Generate unique order ID
-    const orderId = `ORD-${Date.now()}-${Math.random().toString(36).substr(2, 9).toUpperCase()}`;
+    const storeId = bodyStoreId || routeStoreId;
 
-    const newOrder = new orderModel({
+    const orderId = `ORD-${Date.now()}-${Math.random().toString(36).slice(2, 9).toUpperCase()}`;
+
+    const sanitizedCustomerLocation =
+      customerLocation &&
+      Number.isFinite(Number(customerLocation.lat)) &&
+      Number.isFinite(Number(customerLocation.lng))
+        ? {
+            lat: Number(customerLocation.lat),
+            lng: Number(customerLocation.lng),
+            label: customerLocation.label || deliveryAddress,
+          }
+        : undefined;
+
+    const newOrder = await orderModel.create({
       orderId,
       storeId,
       clientId,
       items,
       totalAmount,
       deliveryAddress,
+      customerLocation: sanitizedCustomerLocation,
       clientName,
       clientPhone,
-      status: "pending",
+      status: ORDER_STATUS.RECEIVED,
     });
 
-    await newOrder.save();
+    const io = getIO();
+
+    io.to(`store:${newOrder.storeId}`).emit("order:store:new", {
+      title: "New order received",
+      playSound: true,
+      order: newOrder,
+    });
+
+    io.to(`user:${newOrder.clientId}`).emit("order:user:tracking", {
+      orderId: newOrder._id,
+      status: ORDER_STATUS.RECEIVED,
+      progressFlow: STATUS_FLOW,
+      order: newOrder,
+    });
 
     res.status(201).json({
       message: "Order created successfully",
       order: newOrder,
+      lifecycle: STATUS_FLOW,
     });
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -202,6 +376,7 @@ export const getUserOrders = async (req, res) => {
     res.status(200).json({
       message: "User orders retrieved successfully",
       orders,
+      lifecycle: STATUS_FLOW,
     });
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -216,7 +391,14 @@ export const getUserTracking = async (req, res) => {
     const tracking = await orderModel
       .find({
         clientId: userId,
-        status: { $in: ["pending", "shipped", "in_transit"] },
+        status: {
+          $in: [
+            ORDER_STATUS.RECEIVED,
+            ORDER_STATUS.PREPARING,
+            ORDER_STATUS.PARTNER_ASSIGNED,
+            ORDER_STATUS.OUT_FOR_DELIVERY,
+          ],
+        },
       })
       .sort({ createdAt: -1 })
       .populate("partnerId", "name phone vehicle");
@@ -224,8 +406,108 @@ export const getUserTracking = async (req, res) => {
     res.status(200).json({
       message: "User tracking info retrieved",
       tracking,
+      lifecycle: STATUS_FLOW,
     });
   } catch (error) {
     res.status(500).json({ message: error.message });
+  }
+};
+
+// Get partner orders
+export const getPartnerOrders = async (req, res) => {
+  try {
+    const { partnerId } = req.params;
+
+    const orders = await orderModel
+      .find({ partnerId })
+      .sort({ createdAt: -1 })
+      .populate("storeId", "storeName phone address city");
+
+    res.status(200).json({
+      message: "Partner orders retrieved successfully",
+      orders,
+    });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// Get open jobs for partner claim
+export const getOpenPartnerJobs = async (req, res) => {
+  try {
+    const jobs = await orderModel
+      .find({
+        status: ORDER_STATUS.PREPARING,
+        partnerId: null,
+      })
+      .sort({ createdAt: -1 })
+      .populate("storeId", "storeName phone address city");
+
+    res.status(200).json({
+      message: "Open jobs retrieved successfully",
+      jobs,
+    });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// Partner claims an available delivery
+export const claimPartnerJob = async (req, res) => {
+  try {
+    const { orderId } = req.params;
+    const { partnerId } = req.body;
+
+    if (!partnerId) {
+      return res.status(400).json({ message: "partnerId is required" });
+    }
+
+    const partner = await partnerModel.findById(partnerId);
+    if (!partner) {
+      return res.status(404).json({ message: "Partner not found" });
+    }
+
+    if (!partner.isAvailable) {
+      return res.status(409).json({ message: "Partner is not available" });
+    }
+
+    const order = await orderModel.findById(orderId);
+    if (!order) {
+      return res.status(404).json({ message: "Order not found" });
+    }
+
+    if (order.partnerId) {
+      return res.status(409).json({ message: "Order already claimed" });
+    }
+
+    if (order.status !== ORDER_STATUS.PREPARING) {
+      return res.status(409).json({
+        message: `Order cannot be claimed in ${order.status} status`,
+      });
+    }
+
+    const updatedOrder = await orderModel
+      .findByIdAndUpdate(
+        orderId,
+        {
+          partnerId,
+          status: ORDER_STATUS.PARTNER_ASSIGNED,
+          shippedAt: new Date(),
+        },
+        { new: true },
+      )
+      .populate("partnerId", "name phone vehicle")
+      .populate("storeId", "storeName address city phone");
+
+    await syncPartnerAvailability(partnerId);
+    emitOrderStatus(updatedOrder);
+
+    return res.status(200).json({
+      message: "Job claimed successfully",
+      order: updatedOrder,
+      lifecycle: STATUS_FLOW,
+    });
+  } catch (error) {
+    return res.status(500).json({ message: error.message });
   }
 };

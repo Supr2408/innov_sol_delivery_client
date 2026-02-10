@@ -28,7 +28,7 @@ const AdminLogin = () => {
         localStorage.setItem("token", data.token);
 
         toast.success("Login successful");
-        navigate("/");
+        navigate("/admin-dashboard");
       } else {
         await axios.post("/admins/register", {
           name,

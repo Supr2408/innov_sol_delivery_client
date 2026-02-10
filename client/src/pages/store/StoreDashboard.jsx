@@ -6,13 +6,23 @@ import Swal from "sweetalert2";
 import ItemModal from "../../components/ItemModal";
 import { FiEdit2, FiTrash2 } from "react-icons/fi";
 
+const ORDER_STATUS_LABELS = {
+  pending: "Order Received",
+  confirmed: "Preparing",
+  shipped: "Partner Assigned",
+  in_transit: "Out for Delivery",
+  delivered: "Delivered",
+  cancelled: "Cancelled",
+};
+
 const StoreDashboard = () => {
   const { user } = useContext(AppContext);
   const [activeTab, setActiveTab] = useState("stock");
   const [items, setItems] = useState([]);
   const [orders, setOrders] = useState([]);
   const [partners, setPartners] = useState([]);
-  const [showAddForm, setShowAddForm] = useState(false);
+  const [assignablePartners, setAssignablePartners] = useState([]);
+  const [selectedPartnerByOrder, setSelectedPartnerByOrder] = useState({});
   const [showImportForm, setShowImportForm] = useState(false);
   const [showItemModal, setShowItemModal] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -41,6 +51,7 @@ const StoreDashboard = () => {
         fetchItems();
       } else if (activeTab === "orders") {
         fetchOrders();
+        fetchAssignablePartners();
       } else if (activeTab === "deliveries") {
         fetchPartners();
       }
@@ -58,7 +69,7 @@ const StoreDashboard = () => {
       setLoading(true);
       const { data } = await axios.get(`/items/${user.id}`);
       setItems(data.items || []);
-    } catch (error) {
+    } catch {
       toast.error("Failed to fetch items");
     } finally {
       setLoading(false);
@@ -70,7 +81,7 @@ const StoreDashboard = () => {
       setLoading(true);
       const { data } = await axios.get(`/orders/${user.id}`);
       setOrders(data.orders || []);
-    } catch (error) {
+    } catch {
       toast.error("Failed to fetch orders");
     } finally {
       setLoading(false);
@@ -82,11 +93,50 @@ const StoreDashboard = () => {
       setLoading(true);
       const { data } = await axios.get(`/orders/partners/${user.id}`);
       setPartners(data.partners || []);
-    } catch (error) {
+    } catch {
       toast.error("Failed to fetch delivery partners");
     } finally {
       setLoading(false);
     }
+  };
+
+  const fetchAssignablePartners = async () => {
+    try {
+      const { data } = await axios.get("/partners/all");
+      setAssignablePartners(data.partners || []);
+    } catch {
+      toast.error("Failed to fetch partners for assignment");
+    }
+  };
+
+  const handleOrderStatusUpdate = async (orderId, status, extraPayload = {}) => {
+    try {
+      setLoading(true);
+      await axios.put(`/orders/${orderId}`, {
+        status,
+        ...extraPayload,
+      });
+      toast.success(`Order moved to "${ORDER_STATUS_LABELS[status] || status}"`);
+      fetchOrders();
+      fetchPartners();
+    } catch (error) {
+      toast.error(error.response?.data?.message || "Failed to update order status");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleAssignSelectedPartner = async (orderId) => {
+    const selectedPartnerId = selectedPartnerByOrder[orderId];
+
+    if (!selectedPartnerId) {
+      toast.error("Please select a partner first");
+      return;
+    }
+
+    await handleOrderStatusUpdate(orderId, "shipped", {
+      partnerId: selectedPartnerId,
+    });
   };
 
   const handleInputChange = (e) => {
@@ -149,7 +199,7 @@ const StoreDashboard = () => {
       setEditStockId(null);
       setEditStockValue("");
       fetchItems();
-    } catch (error) {
+    } catch {
       toast.error("Failed to update stock");
     } finally {
       setLoading(false);
@@ -194,7 +244,7 @@ const StoreDashboard = () => {
         toast.success("Item deleted successfully");
         fetchItems();
         Swal.fire("Deleted!", "Item has been deleted successfully.", "success");
-      } catch (error) {
+      } catch {
         toast.error("Failed to delete item");
         Swal.fire("Error!", "Failed to delete the item.", "error");
       } finally {
@@ -263,7 +313,7 @@ const StoreDashboard = () => {
         "Selected items have been deleted successfully.",
         "success",
       );
-    } catch (error) {
+    } catch {
       toast.error("Failed to delete selected items");
       Swal.fire("Error!", "Failed to delete the selected items.", "error");
     } finally {
@@ -363,6 +413,8 @@ const StoreDashboard = () => {
         return "bg-orange-100 text-orange-800";
       case "pending":
         return "bg-yellow-100 text-yellow-800";
+      case "confirmed":
+        return "bg-indigo-100 text-indigo-800";
       case "cancelled":
         return "bg-red-100 text-red-800";
       default:
@@ -803,6 +855,9 @@ const StoreDashboard = () => {
                         <th className="px-2 sm:px-6 py-2 sm:py-3 text-left text-xs sm:text-sm font-semibold">
                           Date
                         </th>
+                        <th className="px-2 sm:px-6 py-2 sm:py-3 text-left text-xs sm:text-sm font-semibold">
+                          Actions
+                        </th>
                       </tr>
                     </thead>
                     <tbody className="divide-y">
@@ -821,14 +876,75 @@ const StoreDashboard = () => {
                             <span
                               className={`px-2 sm:px-3 py-1 rounded-full text-xs font-semibold inline-block whitespace-nowrap ${getStatusColor(order.status)}`}
                             >
-                              {order.status.replace(/_/g, " ")}
+                              {ORDER_STATUS_LABELS[order.status] || order.status.replace(/_/g, " ")}
                             </span>
                           </td>
                           <td className="px-2 sm:px-6 py-2 sm:py-4 text-xs sm:text-sm text-gray-600">
-                            <span className="line-clamp-1">{order.partnerName || "Unassigned"}</span>
+                            <span className="line-clamp-1">
+                              {order.partnerId?.name || order.partnerName || "Unassigned"}
+                            </span>
                           </td>
                           <td className="px-2 sm:px-6 py-2 sm:py-4 text-xs sm:text-sm text-gray-600">
                             <span className="line-clamp-1">{new Date(order.createdAt).toLocaleDateString()}</span>
+                          </td>
+                          <td className="px-2 sm:px-6 py-2 sm:py-4 text-xs sm:text-sm">
+                            <div className="flex flex-wrap gap-2">
+                              {order.status === "pending" && (
+                                <>
+                                  <button
+                                    onClick={() =>
+                                      handleOrderStatusUpdate(order._id, "confirmed")
+                                    }
+                                    className="bg-blue-500 text-white px-2 py-1 rounded text-xs hover:bg-blue-600"
+                                  >
+                                    Confirm
+                                  </button>
+                                  <button
+                                    onClick={() =>
+                                      handleOrderStatusUpdate(order._id, "cancelled")
+                                    }
+                                    className="bg-red-500 text-white px-2 py-1 rounded text-xs hover:bg-red-600"
+                                  >
+                                    Reject
+                                  </button>
+                                </>
+                              )}
+
+                              {order.status === "confirmed" && !order.partnerId && (
+                                <>
+                                  <select
+                                    value={selectedPartnerByOrder[order._id] || ""}
+                                    onChange={(e) =>
+                                      setSelectedPartnerByOrder((prev) => ({
+                                        ...prev,
+                                        [order._id]: e.target.value,
+                                      }))
+                                    }
+                                    className="border border-gray-300 rounded px-2 py-1 text-xs"
+                                  >
+                                    <option value="">Select Partner</option>
+                                    {assignablePartners
+                                      .filter((partner) => partner.isAvailable)
+                                      .map((partner) => (
+                                        <option key={partner._id} value={partner._id}>
+                                          {partner.name} ({partner.vehicle})
+                                        </option>
+                                      ))}
+                                  </select>
+                                  <button
+                                    onClick={() => handleAssignSelectedPartner(order._id)}
+                                    className="bg-green-500 text-white px-2 py-1 rounded text-xs hover:bg-green-600"
+                                  >
+                                    Assign Selected
+                                  </button>
+                                </>
+                              )}
+
+                              {order.status !== "pending" &&
+                                !(order.status === "confirmed" && !order.partnerId) && (
+                                  <span className="text-gray-400 text-xs">No action</span>
+                                )}
+                            </div>
                           </td>
                         </tr>
                       ))}

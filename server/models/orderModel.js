@@ -51,6 +51,16 @@ const orderSchema = new mongoose.Schema(
       type: String,
       required: true,
     },
+    customerLocation: {
+      lat: Number,
+      lng: Number,
+      label: String,
+    },
+    partnerCurrentLocation: {
+      lat: Number,
+      lng: Number,
+      updatedAt: Date,
+    },
 
     clientName: String,
     clientPhone: String,
@@ -64,6 +74,7 @@ const orderSchema = new mongoose.Schema(
 
     shippedAt: Date,
     deliveredAt: Date,
+    proofOfDeliveryImage: String,
   },
   { timestamps: true }
 );

@@ -7,6 +7,8 @@ import UserLogin from "./pages/auth/UserLogin";
 import PartnerLogin from "./pages/auth/PartnerLogin";
 import StoreLogin from "./pages/auth/StoreLogin";
 import StoreDashboard from "./pages/store/StoreDashboard";
+import PartnerDashboard from "./pages/partner/PartnerDashboard";
+import AdminDashboard from "./pages/admin/AdminDashboard";
 import Footer from "./components/Footer";
 
 import { ToastContainer } from "react-toastify";
@@ -15,6 +17,8 @@ import UserDashboard from "./pages/user/UserDashboard";
 import { AppContext } from "./context/AppContext";
 import UserNavbar from "./components/UserNavbar";
 import StoreNavbar from "./components/StoreNavbar";
+import PartnerNavbar from "./components/PartnerNavbar";
+import AdminNavbar from "./components/AdminNavbar";
 import ProtectedRoute from "./components/ProtectedRoute";
 import Unauthorized from "./pages/errors/Unauthorized";
 import NotFound from "./pages/errors/NotFound";
@@ -30,6 +34,8 @@ const App = () => {
       {!isAuthenticated && <Navbar />}
       {isAuthenticated && userRole === "user" && <UserNavbar />}
       {isAuthenticated && userRole === "store" && <StoreNavbar />}
+      {isAuthenticated && userRole === "partner" && <PartnerNavbar />}
+      {isAuthenticated && userRole === "admin" && <AdminNavbar />}
 
       {/* MAIN CONTENT */}
       <main className="flex-grow">
@@ -40,6 +46,16 @@ const App = () => {
           <Route path="/store-login" element={<StoreLogin />} />
           <Route path="/admin-login" element={<AdminLogin />} />
           <Route path="/partner-login" element={<PartnerLogin />} />
+
+          {/* ADMIN */}
+          <Route
+            path="/admin-dashboard"
+            element={
+              <ProtectedRoute allowedRoles={["admin"]}>
+                <AdminDashboard />
+              </ProtectedRoute>
+            }
+          />
 
           {/* USER */}
           <Route
@@ -57,6 +73,16 @@ const App = () => {
             element={
               <ProtectedRoute allowedRoles={["store"]}>
                 <StoreDashboard />
+              </ProtectedRoute>
+            }
+          />
+
+          {/* PARTNER */}
+          <Route
+            path="/partner-dashboard"
+            element={
+              <ProtectedRoute allowedRoles={["partner"]}>
+                <PartnerDashboard />
               </ProtectedRoute>
             }
           />
