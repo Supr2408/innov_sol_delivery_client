@@ -11,6 +11,7 @@ import {
   getPartnerOrders,
   getOpenPartnerJobs,
   claimPartnerJob,
+  verifyAndCompleteOrder,
 } from "../controllers/orderController.js";
 
 const router = express.Router();
@@ -24,6 +25,7 @@ router.get("/tracking/:userId", getUserTracking);
 router.get("/partner/:partnerId", getPartnerOrders);
 router.get("/jobs/open", getOpenPartnerJobs);
 router.post("/:orderId/claim", claimPartnerJob);
+router.post("/:orderId/verify-complete", verifyAndCompleteOrder);
 router.put("/:orderId", updateOrderStatus);
 router.post("/create/:storeId", createOrder);
 router.get("/:storeId", getStoreOrders);

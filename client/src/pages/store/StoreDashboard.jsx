@@ -1,36 +1,267 @@
-import React, { useContext, useEffect, useState } from "react";
-import { AppContext } from "../../context/AppContext";
+
+import { createElement, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import axios from "axios";
 import { toast } from "react-toastify";
-import Swal from "sweetalert2";
-import ItemModal from "../../components/ItemModal";
-import { FiEdit2, FiTrash2 } from "react-icons/fi";
+import { AnimatePresence, motion } from "framer-motion";
+import {
+  AlertTriangle,
+  Boxes,
+  CheckCircle2,
+  ClipboardList,
+  Download,
+  Loader2,
+  PackagePlus,
+  PackageCheck,
+  RefreshCw,
+  Search,
+  Truck,
+  Upload,
+  Wallet,
+  X,
+} from "lucide-react";
+import LiveRouteMap from "../../components/LiveRouteMap";
+import { AppContext } from "../../context/appContext";
 
 const ORDER_STATUS_LABELS = {
-  pending: "Order Received",
+  pending: "Incoming",
   confirmed: "Preparing",
-  shipped: "Partner Assigned",
-  in_transit: "Out for Delivery",
+  shipped: "Ready",
+  in_transit: "Dispatched",
   delivered: "Delivered",
   cancelled: "Cancelled",
 };
 
-const StoreDashboard = () => {
-  const { user } = useContext(AppContext);
-  const [activeTab, setActiveTab] = useState("stock");
-  const [items, setItems] = useState([]);
-  const [orders, setOrders] = useState([]);
-  const [partners, setPartners] = useState([]);
-  const [assignablePartners, setAssignablePartners] = useState([]);
-  const [selectedPartnerByOrder, setSelectedPartnerByOrder] = useState({});
-  const [showImportForm, setShowImportForm] = useState(false);
-  const [showItemModal, setShowItemModal] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [editStockId, setEditStockId] = useState(null);
-  const [editStockValue, setEditStockValue] = useState("");
-  const [selectedItemIds, setSelectedItemIds] = useState([]);
+const OVERDUE_MINUTES = 20;
+const MAPTILER_API_KEY = import.meta.env.VITE_MAPTILER_API_KEY;
+const INVENTORY_TEMPLATE_ROWS = [
+  ["Item Name", "Description", "Price", "Stock", "Category", "SKU", "Image"],
+  ["Fresh Bread", "Daily baked bread", "4.50", "24", "Bakery", "BRD-001", ""],
+  ["Milk 1L", "Low fat milk", "2.99", "30", "Dairy", "MLK-001", ""],
+];
 
-  const [formData, setFormData] = useState({
+const MotionHeader = motion.header;
+const MotionSection = motion.section;
+const MotionArticle = motion.article;
+const MotionAside = motion.aside;
+const MotionDiv = motion.div;
+
+const loadSocketClient = () =>
+  new Promise((resolve, reject) => {
+    if (window.io) {
+      resolve(window.io);
+      return;
+    }
+
+    const existingScript = document.querySelector("script[data-socket-io-client]");
+    if (existingScript) {
+      existingScript.addEventListener("load", () => resolve(window.io));
+      existingScript.addEventListener("error", () =>
+        reject(new Error("Socket client failed to load")),
+      );
+      return;
+    }
+
+    const script = document.createElement("script");
+    script.src = "https://cdn.socket.io/4.8.1/socket.io.min.js";
+    script.async = true;
+    script.dataset.socketIoClient = "true";
+    script.addEventListener("load", () => resolve(window.io));
+    script.addEventListener("error", () => reject(new Error("Socket client failed to load")));
+    document.body.appendChild(script);
+  });
+
+const resolveSocketServerUrl = () => {
+  const configuredBackendUrl = import.meta.env.VITE_BACKEND_URL;
+  if (!configuredBackendUrl) return "http://localhost:5000";
+
+  try {
+    const parsedBackendUrl = new URL(configuredBackendUrl);
+    return `${parsedBackendUrl.protocol}//${parsedBackendUrl.host}`;
+  } catch {
+    return configuredBackendUrl.replace(/\/api\/?$/, "");
+  }
+};
+
+const toLocation = (location) => {
+  const lat = Number(location?.lat);
+  const lng = Number(location?.lng);
+
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+    return null;
+  }
+
+  return { lat, lng };
+};
+
+const formatCurrency = (value) => `$${Number(value || 0).toFixed(2)}`;
+
+const createGeneratedSku = (itemName = "") => {
+  const slug = String(itemName || "")
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, "-")
+    .replace(/(^-|-$)/g, "")
+    .slice(0, 16);
+
+  const suffix = Math.random().toString(36).slice(2, 6).toUpperCase();
+  return `${slug || "ITEM"}-${suffix}`;
+};
+
+const isSameDate = (dateA, dateB) =>
+  dateA.getFullYear() === dateB.getFullYear() &&
+  dateA.getMonth() === dateB.getMonth() &&
+  dateA.getDate() === dateB.getDate();
+
+const minutesFromNow = (dateValue) => {
+  const timestamp = new Date(dateValue).getTime();
+  if (!Number.isFinite(timestamp)) return 0;
+  return Math.max(0, Math.floor((Date.now() - timestamp) / 60000));
+};
+
+const resolveOrderPartner = (order) => {
+  const partnerObject = typeof order?.partnerId === "object" ? order.partnerId : null;
+  const partnerId = partnerObject?._id || order?.partnerId || "";
+
+  return {
+    partnerId: String(partnerId || ""),
+    name: partnerObject?.name || order?.partnerName || "Unassigned",
+    vehicle: partnerObject?.vehicle || order?.partnerVehicle || "-",
+  };
+};
+
+const resolvePickupDestination = (order, storeLocation) => {
+  return (
+    toLocation(order?.pickupLocation) ||
+    toLocation(order?.storeLocation) ||
+    toLocation(order?.storeId?.location) ||
+    storeLocation ||
+    null
+  );
+};
+
+const resolveMapDestination = (order, storeLocation) => {
+  const pickupDestination = resolvePickupDestination(order, storeLocation);
+
+  if (order?.status === "shipped") {
+    return pickupDestination;
+  }
+
+  return toLocation(order?.customerLocation) || pickupDestination;
+};
+
+const isOrderOverdue = (order) => {
+  if (!["pending", "confirmed"].includes(order?.status)) return false;
+  return minutesFromNow(order?.createdAt) >= OVERDUE_MINUTES;
+};
+
+const getStatusBadge = (order) => {
+  if (isOrderOverdue(order)) {
+    return {
+      label: "Overdue",
+      className: "bg-rose-100 text-rose-700 ring-1 ring-rose-200 animate-pulse",
+    };
+  }
+
+  switch (order?.status) {
+    case "pending":
+      return {
+        label: "Incoming",
+        className: "bg-red-100 text-red-700 ring-1 ring-red-200",
+      };
+    case "confirmed":
+      return {
+        label: "Preparing",
+        className: "bg-amber-100 text-amber-700 ring-1 ring-amber-200",
+      };
+    case "shipped":
+      return {
+        label: "Ready",
+        className: "bg-emerald-100 text-emerald-700 ring-1 ring-emerald-200",
+      };
+    case "in_transit":
+      return {
+        label: "Dispatched",
+        className: "bg-blue-100 text-blue-700 ring-1 ring-blue-200",
+      };
+    case "delivered":
+      return {
+        label: "Delivered",
+        className: "bg-green-100 text-green-700 ring-1 ring-green-200",
+      };
+    case "cancelled":
+      return {
+        label: "Cancelled",
+        className: "bg-slate-200 text-slate-700 ring-1 ring-slate-300",
+      };
+    default:
+      return {
+        label: ORDER_STATUS_LABELS[order?.status] || "Unknown",
+        className: "bg-slate-100 text-slate-700 ring-1 ring-slate-200",
+      };
+  }
+};
+
+const sortByNewest = (items) =>
+  [...items].sort(
+    (firstOrder, secondOrder) =>
+      new Date(secondOrder?.createdAt || 0).getTime() - new Date(firstOrder?.createdAt || 0).getTime(),
+  );
+
+const MetricCard = ({ icon: Icon, label, value, hint }) => (
+  <MotionArticle
+    layout
+    initial={{ opacity: 0, y: 10 }}
+    animate={{ opacity: 1, y: 0 }}
+    transition={{ duration: 0.18 }}
+    className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"
+  >
+    <div className="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-slate-100 text-slate-700">
+      {createElement(Icon, { size: 18 })}
+    </div>
+    <p className="mt-3 text-xs font-semibold uppercase tracking-[0.1em] text-slate-500">{label}</p>
+    <p className="mt-1 text-2xl font-bold text-slate-900">{value}</p>
+    <p className="mt-1 text-xs text-slate-500">{hint}</p>
+  </MotionArticle>
+);
+
+const ColumnShell = ({ title, subtitle, count, children }) => (
+  <MotionSection
+    layout
+    initial={{ opacity: 0, y: 8 }}
+    animate={{ opacity: 1, y: 0 }}
+    transition={{ duration: 0.2 }}
+    className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"
+  >
+    <div className="mb-4 flex items-start justify-between gap-3">
+      <div>
+        <h2 className="text-base font-semibold text-slate-900">{title}</h2>
+        <p className="text-xs text-slate-500">{subtitle}</p>
+      </div>
+      <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700">{count}</span>
+    </div>
+    <div className="space-y-3">{children}</div>
+  </MotionSection>
+);
+
+const StoreDashboard = () => {
+  const { user, token, userRole } = useContext(AppContext);
+  const storeId = user?.id || user?._id;
+
+  const [orders, setOrders] = useState([]);
+  const [items, setItems] = useState([]);
+  const [partners, setPartners] = useState([]);
+
+  const [loadingOrders, setLoadingOrders] = useState(false);
+  const [loadingItems, setLoadingItems] = useState(false);
+  const [loadingPartners, setLoadingPartners] = useState(false);
+
+  const [updatingOrderId, setUpdatingOrderId] = useState("");
+  const [updatingItemId, setUpdatingItemId] = useState("");
+  const [selectedPartnerByOrder, setSelectedPartnerByOrder] = useState({});
+  const [inventoryQuery, setInventoryQuery] = useState("");
+  const [inventoryCategory, setInventoryCategory] = useState("All");
+  const [importingItems, setImportingItems] = useState(false);
+  const [addingItem, setAddingItem] = useState(false);
+  const [newItemForm, setNewItemForm] = useState({
     itemName: "",
     description: "",
     price: "",
@@ -38,978 +269,1169 @@ const StoreDashboard = () => {
     category: "General",
     sku: "",
     image: "",
-    specifications: [],
   });
 
-  const [editingId, setEditingId] = useState(null);
-  const [selectedCategory, setSelectedCategory] = useState("All");
+  const [socketConnected, setSocketConnected] = useState(false);
+  const [inventoryOpen, setInventoryOpen] = useState(false);
+  const [storeLocation, setStoreLocation] = useState(null);
 
-  // Fetch data based on active tab
-  useEffect(() => {
-    if (user?.id) {
-      if (activeTab === "stock") {
-        fetchItems();
-      } else if (activeTab === "orders") {
-        fetchOrders();
-        fetchAssignablePartners();
-      } else if (activeTab === "deliveries") {
-        fetchPartners();
-      }
-    }
-  }, [user, activeTab]);
+  const socketRef = useRef(null);
+  const audioContextRef = useRef(null);
+  const knownPositiveStockRef = useRef({});
+  const excelInputRef = useRef(null);
 
-  useEffect(() => {
-    setSelectedItemIds((prev) =>
-      prev.filter((id) => items.some((item) => item._id === id)),
-    );
-  }, [items]);
+  const upsertOrder = useCallback((orderList, nextOrder) => {
+    const withoutCurrent = orderList.filter((order) => String(order._id) !== String(nextOrder._id));
+    return [nextOrder, ...withoutCurrent];
+  }, []);
 
-  const fetchItems = async () => {
+  const fetchOrders = useCallback(async () => {
+    if (!storeId) return;
+
     try {
-      setLoading(true);
-      const { data } = await axios.get(`/items/${user.id}`);
-      setItems(data.items || []);
-    } catch {
-      toast.error("Failed to fetch items");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const fetchOrders = async () => {
-    try {
-      setLoading(true);
-      const { data } = await axios.get(`/orders/${user.id}`);
-      setOrders(data.orders || []);
+      setLoadingOrders(true);
+      const { data } = await axios.get(`/orders/${storeId}`);
+      setOrders(Array.isArray(data?.orders) ? data.orders : []);
     } catch {
       toast.error("Failed to fetch orders");
     } finally {
-      setLoading(false);
+      setLoadingOrders(false);
     }
-  };
+  }, [storeId]);
 
-  const fetchPartners = async () => {
+  const fetchItems = useCallback(async () => {
+    if (!storeId) return;
+
     try {
-      setLoading(true);
-      const { data } = await axios.get(`/orders/partners/${user.id}`);
-      setPartners(data.partners || []);
+      setLoadingItems(true);
+      const { data } = await axios.get(`/items/${storeId}`);
+      setItems(Array.isArray(data?.items) ? data.items : []);
     } catch {
-      toast.error("Failed to fetch delivery partners");
+      toast.error("Failed to fetch inventory");
     } finally {
-      setLoading(false);
+      setLoadingItems(false);
     }
-  };
+  }, [storeId]);
 
-  const fetchAssignablePartners = async () => {
+  const fetchPartners = useCallback(async () => {
     try {
+      setLoadingPartners(true);
       const { data } = await axios.get("/partners/all");
-      setAssignablePartners(data.partners || []);
+      setPartners(Array.isArray(data?.partners) ? data.partners : []);
     } catch {
-      toast.error("Failed to fetch partners for assignment");
-    }
-  };
-
-  const handleOrderStatusUpdate = async (orderId, status, extraPayload = {}) => {
-    try {
-      setLoading(true);
-      await axios.put(`/orders/${orderId}`, {
-        status,
-        ...extraPayload,
-      });
-      toast.success(`Order moved to "${ORDER_STATUS_LABELS[status] || status}"`);
-      fetchOrders();
-      fetchPartners();
-    } catch (error) {
-      toast.error(error.response?.data?.message || "Failed to update order status");
+      toast.error("Failed to fetch partners");
     } finally {
-      setLoading(false);
+      setLoadingPartners(false);
     }
-  };
+  }, []);
 
-  const handleAssignSelectedPartner = async (orderId) => {
-    const selectedPartnerId = selectedPartnerByOrder[orderId];
+  const refreshDashboard = useCallback(async () => {
+    await Promise.all([fetchOrders(), fetchItems(), fetchPartners()]);
+  }, [fetchItems, fetchOrders, fetchPartners]);
 
-    if (!selectedPartnerId) {
-      toast.error("Please select a partner first");
-      return;
-    }
+  const playNewOrderSound = useCallback(async () => {
+    if (typeof window === "undefined") return;
 
-    await handleOrderStatusUpdate(orderId, "shipped", {
-      partnerId: selectedPartnerId,
-    });
-  };
-
-  const handleInputChange = (e) => {
-    const { name, value } = e.target;
-    setFormData((prev) => ({
-      ...prev,
-      [name]: value,
-    }));
-  };
-
-  const handleAddItem = async (e) => {
-    e.preventDefault();
-
-    if (!formData.itemName || !formData.price || formData.stock === "") {
-      toast.error("Please fill in all required fields");
-      return;
-    }
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContextClass) return;
 
     try {
-      setLoading(true);
-      if (editingId) {
-        // Update item
-        await axios.put(`/items/${editingId}`, formData);
-        toast.success("Item updated successfully");
-        setEditingId(null);
-      } else {
-        // Add new item
-        await axios.post(`/items/add/${user.id}`, formData);
-        toast.success("Item added successfully");
+      const audioContext =
+        audioContextRef.current && audioContextRef.current.state !== "closed"
+          ? audioContextRef.current
+          : new AudioContextClass();
+
+      audioContextRef.current = audioContext;
+
+      if (audioContext.state === "suspended") {
+        await audioContext.resume();
       }
 
-      setFormData({
-        itemName: "",
-        description: "",
-        price: "",
-        stock: "",
-        category: "General",
-        sku: "",
-        image: "",
-        specifications: [],
-      });
-      setShowItemModal(false);
-      fetchItems();
-    } catch (error) {
-      toast.error(error.response?.data?.message || "Failed to save item");
-    } finally {
-      setLoading(false);
-    }
-  };
+      const now = audioContext.currentTime;
+      const oscillator = audioContext.createOscillator();
+      const gainNode = audioContext.createGain();
 
-  const handleUpdateStock = async (itemId, newStock) => {
-    try {
-      setLoading(true);
-      const item = items.find((i) => i._id === itemId);
-      await axios.put(`/items/${itemId}`, {
-        ...item,
-        stock: parseInt(newStock),
-      });
-      toast.success("Stock updated successfully");
-      setEditStockId(null);
-      setEditStockValue("");
-      fetchItems();
+      oscillator.type = "triangle";
+      oscillator.frequency.setValueAtTime(920, now);
+      oscillator.frequency.exponentialRampToValueAtTime(700, now + 0.25);
+
+      gainNode.gain.setValueAtTime(0.0001, now);
+      gainNode.gain.linearRampToValueAtTime(0.05, now + 0.03);
+      gainNode.gain.exponentialRampToValueAtTime(0.0001, now + 0.28);
+
+      oscillator.connect(gainNode);
+      gainNode.connect(audioContext.destination);
+
+      oscillator.start(now);
+      oscillator.stop(now + 0.3);
     } catch {
-      toast.error("Failed to update stock");
-    } finally {
-      setLoading(false);
+      // Audio cue is best-effort only.
     }
-  };
+  }, []);
 
-  const handleEditItem = (item) => {
-    setFormData({
-      itemName: item.itemName,
-      description: item.description,
-      price: item.price,
-      stock: item.stock,
-      category: item.category,
-      sku: item.sku || "",
-      image: item.image || "",
-      specifications: item.specifications || [],
+  const notifyBrowser = useCallback((order) => {
+    if (typeof window === "undefined" || !("Notification" in window)) return;
+    if (Notification.permission !== "granted") return;
+
+    const orderCode = order?.orderId || "New order";
+    const amount = Number(order?.totalAmount || 0).toFixed(2);
+
+    try {
+      const notification = new Notification("New Incoming Order", {
+        body: `${orderCode} - $${amount}`,
+      });
+      setTimeout(() => notification.close(), 6000);
+    } catch {
+      // Notification permission may be blocked by browser policy.
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!storeId) return;
+    refreshDashboard();
+  }, [refreshDashboard, storeId]);
+
+  useEffect(() => {
+    items.forEach((item) => {
+      const stock = Number(item?.stock || 0);
+      if (stock > 0) {
+        knownPositiveStockRef.current[String(item._id)] = stock;
+      }
     });
-    setEditingId(item._id);
-    setShowItemModal(true);
-  };
+  }, [items]);
 
-  const handleDeleteItem = async (itemId) => {
-    const result = await Swal.fire({
-      title: "Delete Item?",
-      text: "This action cannot be undone. Are you sure you want to delete this item?",
-      icon: "warning",
-      showCancelButton: true,
-      confirmButtonColor: "#ef4444",
-      cancelButtonColor: "#6b7280",
-      confirmButtonText: "Yes, delete it!",
-      cancelButtonText: "Cancel",
-      customClass: {
-        confirmButton: "cursor-pointer",
-        cancelButton: "cursor-pointer",
-      },
-    });
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (!("Notification" in window)) return;
 
-    if (result.isConfirmed) {
+    if (Notification.permission === "default") {
+      Notification.requestPermission().catch(() => {
+        // Permission requests can fail silently in some browsers.
+      });
+    }
+  }, []);
+
+  useEffect(() => {
+    const inlineCoordinates = toLocation(user?.location) || toLocation(user?.coordinates);
+    if (inlineCoordinates) {
+      setStoreLocation(inlineCoordinates);
+      return;
+    }
+
+    const addressQuery = [user?.address, user?.city].filter(Boolean).join(", ").trim();
+    if (!addressQuery || !MAPTILER_API_KEY) {
+      setStoreLocation(null);
+      return;
+    }
+
+    const controller = new AbortController();
+
+    const resolveAddressCoordinates = async () => {
       try {
-        setLoading(true);
-        await axios.delete(`/items/${itemId}`);
-        toast.success("Item deleted successfully");
-        fetchItems();
-        Swal.fire("Deleted!", "Item has been deleted successfully.", "success");
-      } catch {
-        toast.error("Failed to delete item");
-        Swal.fire("Error!", "Failed to delete the item.", "error");
-      } finally {
-        setLoading(false);
-      }
-    }
-  };
-
-  const handleToggleSelectItem = (itemId) => {
-    setSelectedItemIds((prev) =>
-      prev.includes(itemId)
-        ? prev.filter((id) => id !== itemId)
-        : [...prev, itemId],
-    );
-  };
-
-  const handleToggleSelectAll = (filteredItems) => {
-    const filteredIds = filteredItems.map((item) => item._id);
-    const allSelected =
-      filteredIds.length > 0 &&
-      filteredIds.every((id) => selectedItemIds.includes(id));
-
-    setSelectedItemIds((prev) => {
-      if (allSelected) {
-        return prev.filter((id) => !filteredIds.includes(id));
-      }
-      const combined = new Set([...prev, ...filteredIds]);
-      return Array.from(combined);
-    });
-  };
-
-  const handleBulkDelete = async (filteredItems) => {
-    if (selectedItemIds.length === 0) return;
-
-    const selectedItems = filteredItems.filter((item) =>
-      selectedItemIds.includes(item._id),
-    );
-
-    const result = await Swal.fire({
-      title: `Delete ${selectedItems.length} Item(s)?`,
-      text: "This action cannot be undone. Are you sure you want to delete the selected items?",
-      icon: "warning",
-      showCancelButton: true,
-      confirmButtonColor: "#ef4444",
-      cancelButtonColor: "#6b7280",
-      confirmButtonText: "Yes, delete them!",
-      cancelButtonText: "Cancel",
-      customClass: {
-        confirmButton: "cursor-pointer",
-        cancelButton: "cursor-pointer",
-      },
-    });
-
-    if (!result.isConfirmed) return;
-
-    try {
-      setLoading(true);
-      await Promise.all(
-        selectedItems.map((item) => axios.delete(`/items/${item._id}`)),
-      );
-      toast.success("Selected items deleted successfully");
-      setSelectedItemIds([]);
-      fetchItems();
-      Swal.fire(
-        "Deleted!",
-        "Selected items have been deleted successfully.",
-        "success",
-      );
-    } catch {
-      toast.error("Failed to delete selected items");
-      Swal.fire("Error!", "Failed to delete the selected items.", "error");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleFileUpload = async (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
-
-    try {
-      setLoading(true);
-      const formDataObj = new FormData();
-      formDataObj.append("file", file);
-
-      const { data } = await axios.post(
-        `/items/import/${user.id}`,
-        formDataObj,
-        {
-          headers: {
-            "Content-Type": "multipart/form-data",
-          },
-        },
-      );
-
-      toast.success(`${data.importedCount} items imported successfully`);
-      setShowImportForm(false);
-      fetchItems();
-    } catch (error) {
-      const errorMsg =
-        error.response?.data?.message || "Failed to import items";
-      toast.error(errorMsg);
-      // Show partial success message if applicable
-      if (error.response?.status === 207) {
-        toast.info(
-          `${error.response?.data?.failedCount} items had issues but some were imported`,
+        const encodedQuery = encodeURIComponent(addressQuery);
+        const response = await fetch(
+          `https://api.maptiler.com/geocoding/${encodedQuery}.json?key=${MAPTILER_API_KEY}&limit=1`,
+          { signal: controller.signal },
         );
+
+        if (!response.ok) return;
+
+        const data = await response.json();
+        const center = data?.features?.[0]?.center;
+        if (!Array.isArray(center) || center.length < 2) return;
+
+        setStoreLocation({ lat: Number(center[1]), lng: Number(center[0]) });
+      } catch {
+        // If geocoding fails, route tracking cards will show fallback message.
       }
+    };
+
+    resolveAddressCoordinates();
+
+    return () => controller.abort();
+  }, [user?.address, user?.city, user?.coordinates, user?.location]);
+
+  useEffect(() => {
+    if (!token || !storeId) return;
+
+    let activeSocket;
+
+    const bindSocket = async () => {
+      try {
+        const ioClient = await loadSocketClient();
+        if (typeof ioClient !== "function") return;
+
+        activeSocket = ioClient(resolveSocketServerUrl(), {
+          transports: ["websocket"],
+          auth: { token },
+        });
+
+        socketRef.current = activeSocket;
+
+        const handleIncomingOrderPayload = (payload = {}) => {
+          const incomingOrder = payload?.order?._id ? payload.order : payload;
+          if (!incomingOrder?._id) return;
+
+          setOrders((currentOrders) => upsertOrder(currentOrders, incomingOrder));
+          playNewOrderSound();
+          notifyBrowser(incomingOrder);
+          toast.info(payload?.title || `New order ${incomingOrder.orderId || "received"}`);
+        };
+
+        activeSocket.on("connect", () => {
+          setSocketConnected(true);
+          activeSocket.emit("join:store", storeId);
+        });
+
+        activeSocket.on("disconnect", () => {
+          setSocketConnected(false);
+        });
+
+        activeSocket.on("order:store:new", handleIncomingOrderPayload);
+        activeSocket.on("order:new", handleIncomingOrderPayload);
+
+        activeSocket.on("order:store:updated", ({ order }) => {
+          if (!order?._id) return;
+          setOrders((currentOrders) => upsertOrder(currentOrders, order));
+        });
+
+        activeSocket.on("order:store:partner-location", ({ orderId, partnerCurrentLocation }) => {
+          if (!orderId || !partnerCurrentLocation) return;
+
+          setOrders((currentOrders) =>
+            currentOrders.map((order) =>
+              String(order._id) === String(orderId)
+                ? {
+                    ...order,
+                    partnerCurrentLocation,
+                  }
+                : order,
+            ),
+          );
+        });
+      } catch {
+        toast.error("Unable to initialize realtime updates");
+      }
+    };
+
+    bindSocket();
+
+    return () => {
+      if (activeSocket) {
+        activeSocket.disconnect();
+      }
+      socketRef.current = null;
+      setSocketConnected(false);
+    };
+  }, [notifyBrowser, playNewOrderSound, storeId, token, upsertOrder]);
+
+  useEffect(
+    () => () => {
+      if (audioContextRef.current?.state !== "closed") {
+        audioContextRef.current?.close();
+      }
+      audioContextRef.current = null;
+    },
+    [],
+  );
+
+  const updateOrderStatus = useCallback(
+    async (orderId, status, extraPayload = {}) => {
+      try {
+        setUpdatingOrderId(orderId);
+        const { data } = await axios.put(`/orders/${orderId}`, {
+          status,
+          ...extraPayload,
+        });
+
+        if (data?.order?._id) {
+          setOrders((currentOrders) => upsertOrder(currentOrders, data.order));
+        } else {
+          await fetchOrders();
+        }
+
+        toast.success(`Order moved to ${ORDER_STATUS_LABELS[status] || status}`);
+      } catch (error) {
+        toast.error(error?.response?.data?.message || "Failed to update order status");
+      } finally {
+        setUpdatingOrderId("");
+      }
+    },
+    [fetchOrders, upsertOrder],
+  );
+
+  const handleAcceptOrder = useCallback(
+    async (orderId) => {
+      await updateOrderStatus(orderId, "confirmed");
+    },
+    [updateOrderStatus],
+  );
+
+  const handleDeclineOrder = useCallback(
+    async (orderId) => {
+      await updateOrderStatus(orderId, "cancelled");
+    },
+    [updateOrderStatus],
+  );
+
+  const handleMarkReady = useCallback(
+    async (order) => {
+      const selectedPartnerId =
+        selectedPartnerByOrder[order._id] || resolveOrderPartner(order).partnerId;
+
+      if (!selectedPartnerId) {
+        toast.error("Select a partner before marking this order as ready");
+        return;
+      }
+
+      await updateOrderStatus(order._id, "shipped", {
+        partnerId: selectedPartnerId,
+      });
+    },
+    [selectedPartnerByOrder, updateOrderStatus],
+  );
+
+  const handleToggleItemStock = useCallback(async (item) => {
+    const itemId = String(item._id);
+    const currentStock = Number(item?.stock || 0);
+    const isInStock = currentStock > 0;
+
+    if (isInStock) {
+      knownPositiveStockRef.current[itemId] = currentStock;
+    }
+
+    const restoredStock = Math.max(1, Number(knownPositiveStockRef.current[itemId] || 1));
+    const nextStock = isInStock ? 0 : restoredStock;
+
+    try {
+      setUpdatingItemId(itemId);
+
+      await axios.put(`/items/${itemId}`, {
+        itemName: item.itemName,
+        description: item.description || "",
+        price: Number(item.price || 0),
+        stock: nextStock,
+        category: item.category || "General",
+        sku: item.sku || `SKU-${itemId}`,
+        image: item.image || "",
+        specifications: Array.isArray(item.specifications) ? item.specifications : [],
+      });
+
+      setItems((currentItems) =>
+        currentItems.map((currentItem) =>
+          String(currentItem._id) === itemId
+            ? {
+                ...currentItem,
+                stock: nextStock,
+              }
+            : currentItem,
+        ),
+      );
+
+      toast.success(`${item.itemName} is now ${nextStock > 0 ? "In Stock" : "Out of Stock"}`);
+    } catch (error) {
+      toast.error(error?.response?.data?.message || "Failed to update item stock");
     } finally {
-      setLoading(false);
+      setUpdatingItemId("");
     }
-  };
+  }, []);
 
-  const downloadTemplate = () => {
-    const templateData = [
-      [
-        "Item Name",
-        "Description",
-        "Price",
-        "Stock",
-        "Category",
-        "SKU",
-        "Image",
-      ],
-      [
-        "Laptop",
-        "High-performance laptop",
-        "999.99",
-        "10",
-        "Electronics",
-        "LAP001",
-        "https://example.com/laptop.jpg",
-      ],
-      [
-        "Mouse",
-        "Wireless mouse",
-        "29.99",
-        "50",
-        "Accessories",
-        "MOU001",
-        "https://example.com/mouse.jpg",
-      ],
-    ];
+  const handleAdjustItemStock = useCallback(async (item, delta) => {
+    const itemId = String(item._id);
+    const nextStock = Math.max(0, Number(item.stock || 0) + Number(delta || 0));
 
-    const csv = templateData.map((row) => row.join(",")).join("\n");
+    try {
+      setUpdatingItemId(itemId);
 
-    const element = document.createElement("a");
-    element.setAttribute(
-      "href",
-      "data:text/csv;charset=utf-8," + encodeURIComponent(csv),
+      await axios.put(`/items/${itemId}`, {
+        itemName: item.itemName,
+        description: item.description || "",
+        price: Number(item.price || 0),
+        stock: nextStock,
+        category: item.category || "General",
+        sku: item.sku || createGeneratedSku(item.itemName),
+        image: item.image || "",
+        specifications: Array.isArray(item.specifications) ? item.specifications : [],
+      });
+
+      setItems((currentItems) =>
+        currentItems.map((currentItem) =>
+          String(currentItem._id) === itemId
+            ? {
+                ...currentItem,
+                stock: nextStock,
+              }
+            : currentItem,
+        ),
+      );
+
+      if (nextStock > 0) {
+        knownPositiveStockRef.current[itemId] = nextStock;
+      }
+    } catch (error) {
+      toast.error(error?.response?.data?.message || "Failed to adjust item stock");
+    } finally {
+      setUpdatingItemId("");
+    }
+  }, []);
+
+  const handleAddItem = useCallback(
+    async (event) => {
+      event.preventDefault();
+      if (!storeId) return;
+
+      const itemName = newItemForm.itemName.trim();
+      const price = Number(newItemForm.price);
+      const stock = Number(newItemForm.stock);
+
+      if (!itemName || !Number.isFinite(price) || price <= 0 || !Number.isFinite(stock) || stock < 0) {
+        toast.error("Enter valid item name, price, and stock");
+        return;
+      }
+
+      const payload = {
+        itemName,
+        description: newItemForm.description.trim(),
+        price,
+        stock,
+        category: newItemForm.category.trim() || "General",
+        sku: newItemForm.sku.trim() || createGeneratedSku(itemName),
+        image: newItemForm.image.trim(),
+        specifications: [],
+      };
+
+      try {
+        setAddingItem(true);
+        const { data } = await axios.post(`/items/add/${storeId}`, payload);
+        if (data?.item?._id) {
+          setItems((currentItems) => [data.item, ...currentItems]);
+        } else {
+          await fetchItems();
+        }
+
+        setNewItemForm({
+          itemName: "",
+          description: "",
+          price: "",
+          stock: "",
+          category: "General",
+          sku: "",
+          image: "",
+        });
+        toast.success("Item added successfully");
+      } catch (error) {
+        toast.error(error?.response?.data?.message || "Failed to add item");
+      } finally {
+        setAddingItem(false);
+      }
+    },
+    [fetchItems, newItemForm, storeId],
+  );
+
+  const handleDownloadInventoryTemplate = useCallback(() => {
+    const csvContent = INVENTORY_TEMPLATE_ROWS.map((row) => row.join(",")).join("\n");
+    const downloadAnchor = document.createElement("a");
+    downloadAnchor.href = `data:text/csv;charset=utf-8,${encodeURIComponent(csvContent)}`;
+    downloadAnchor.download = "store_items_template.csv";
+    document.body.appendChild(downloadAnchor);
+    downloadAnchor.click();
+    document.body.removeChild(downloadAnchor);
+  }, []);
+
+  const handleExcelImport = useCallback(
+    async (event) => {
+      const selectedFile = event.target.files?.[0];
+      event.target.value = "";
+      if (!selectedFile || !storeId) return;
+
+      try {
+        setImportingItems(true);
+        const formData = new FormData();
+        formData.append("file", selectedFile);
+
+        const { data } = await axios.post(`/items/import/${storeId}`, formData, {
+          headers: { "Content-Type": "multipart/form-data" },
+        });
+
+        await fetchItems();
+        toast.success(
+          typeof data?.importedCount === "number"
+            ? `${data.importedCount} items imported successfully`
+            : "Items imported successfully",
+        );
+      } catch (error) {
+        toast.error(error?.response?.data?.message || "Failed to import items");
+      } finally {
+        setImportingItems(false);
+      }
+    },
+    [fetchItems, storeId],
+  );
+
+  const incomingOrders = useMemo(
+    () => sortByNewest(orders.filter((order) => order.status === "pending")),
+    [orders],
+  );
+
+  const preparingOrders = useMemo(
+    () => sortByNewest(orders.filter((order) => order.status === "confirmed")),
+    [orders],
+  );
+
+  const dispatchedOrders = useMemo(
+    () =>
+      sortByNewest(
+        orders.filter((order) => ["shipped", "in_transit"].includes(order.status)),
+      ),
+    [orders],
+  );
+
+  const todayDeliveredOrders = useMemo(() => {
+    const now = new Date();
+
+    return orders.filter((order) => {
+      if (order.status !== "delivered") return false;
+      const completedDate = new Date(order.deliveredAt || order.updatedAt || order.createdAt);
+      if (!Number.isFinite(completedDate.getTime())) return false;
+      return isSameDate(completedDate, now);
+    });
+  }, [orders]);
+
+  const metrics = useMemo(() => {
+    const totalRevenueToday = todayDeliveredOrders.reduce(
+      (sum, order) => sum + Number(order.totalAmount || 0),
+      0,
     );
-    element.setAttribute("download", "store_items_template.csv");
-    element.style.display = "none";
-    document.body.appendChild(element);
-    element.click();
-    document.body.removeChild(element);
-  };
 
-  const getStatusColor = (status) => {
-    switch (status) {
-      case "delivered":
-        return "bg-green-100 text-green-800";
-      case "shipped":
-        return "bg-blue-100 text-blue-800";
-      case "in_transit":
-        return "bg-orange-100 text-orange-800";
-      case "pending":
-        return "bg-yellow-100 text-yellow-800";
-      case "confirmed":
-        return "bg-indigo-100 text-indigo-800";
-      case "cancelled":
-        return "bg-red-100 text-red-800";
-      default:
-        return "bg-gray-100 text-gray-800";
-    }
-  };
+    const pendingOrders = orders.filter((order) => ["pending", "confirmed"].includes(order.status)).length;
 
-  const getStockColor = (stock) => {
-    if (stock > 20) return "bg-green-100 text-green-800";
-    if (stock > 10) return "bg-yellow-100 text-yellow-800";
-    return "bg-red-100 text-red-800";
-  };
+    return {
+      totalRevenueToday,
+      pendingOrders,
+      completedDeliveries: todayDeliveredOrders.length,
+    };
+  }, [orders, todayDeliveredOrders]);
 
-  // Get unique categories from items
-  const getCategories = () => {
-    const categories = new Set(items.map((item) => item.category));
-    return ["All", ...Array.from(categories).sort()];
-  };
+  const availablePartnerOptions = useMemo(
+    () => partners.filter((partner) => partner?.isAvailable),
+    [partners],
+  );
 
-  // Filter items by selected category
-  const getFilteredItems = () => {
-    if (selectedCategory === "All") {
-      return items;
-    }
-    return items.filter((item) => item.category === selectedCategory);
-  };
+  const inventorySummary = useMemo(() => {
+    const inStock = items.filter((item) => Number(item?.stock || 0) > 0).length;
+    return {
+      total: items.length,
+      inStock,
+      outOfStock: items.length - inStock,
+    };
+  }, [items]);
 
-  const firstName = user?.storeName?.split(" ")[0];
-  const filteredItems = getFilteredItems();
-  const selectedCount = selectedItemIds.length;
-  const allFilteredSelected =
-    filteredItems.length > 0 &&
-    filteredItems.every((item) => selectedItemIds.includes(item._id));
+  const inventoryCategories = useMemo(() => {
+    const categorySet = new Set(
+      items.map((item) => String(item?.category || "General").trim()).filter(Boolean),
+    );
+    return ["All", ...Array.from(categorySet).sort((firstCategory, secondCategory) => firstCategory.localeCompare(secondCategory))];
+  }, [items]);
 
-  if (!user || !user.id) {
+  const filteredInventoryItems = useMemo(() => {
+    const normalizedQuery = inventoryQuery.trim().toLowerCase();
+
+    return items
+      .filter((item) => {
+        const matchesCategory =
+          inventoryCategory === "All" ||
+          String(item?.category || "General").toLowerCase() === inventoryCategory.toLowerCase();
+
+        const matchesQuery =
+          !normalizedQuery ||
+          [item?.itemName, item?.description, item?.sku, item?.category]
+            .filter(Boolean)
+            .some((value) => String(value).toLowerCase().includes(normalizedQuery));
+
+        return matchesCategory && matchesQuery;
+      })
+      .sort((firstItem, secondItem) => String(firstItem?.itemName || "").localeCompare(String(secondItem?.itemName || "")));
+  }, [inventoryCategory, inventoryQuery, items]);
+
+  if (userRole && userRole !== "store") {
     return (
-      <div className="min-h-screen flex items-center justify-center text-gray-500">
-        Loading dashboard...
-      </div>
+      <section className="min-h-screen bg-slate-100 p-4">
+        <div className="mx-auto max-w-3xl rounded-2xl border border-slate-200 bg-white p-6 text-center shadow-sm">
+          <p className="text-lg font-semibold text-slate-900">Store access only</p>
+          <p className="mt-2 text-sm text-slate-600">
+            Please login with a store account to access this command center.
+          </p>
+        </div>
+      </section>
     );
   }
 
+  if (!storeId) {
+    return (
+      <section className="min-h-screen bg-slate-100 p-4">
+        <div className="mx-auto flex max-w-3xl items-center justify-center rounded-2xl border border-slate-200 bg-white p-10 shadow-sm">
+          <Loader2 className="mr-2 animate-spin text-slate-500" size={18} />
+          <span className="text-sm text-slate-600">Loading store dashboard...</span>
+        </div>
+      </section>
+    );
+  }
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 py-6">
-        {/* Header */}
-        <div className="p-4 sm:p-8 mb-4">
-          <h1 className="text-xl sm:text-2xl font-semibold">
-            Welcome, {firstName} 👋
-          </h1>
-        </div>
-
-        {/* Tabs - Mobile Scrollable */}
-        <div className="flex gap-2 sm:gap-4 mb-6 sm:mb-8 border-b overflow-x-auto pb-2 sm:pb-0 flex-nowrap">
-          <button
-            onClick={() => setActiveTab("stock")}
-            className={`px-3 sm:px-6 py-2 sm:py-3 font-semibold border-b-2 transition cursor-pointer text-sm sm:text-base whitespace-nowrap ${
-              activeTab === "stock"
-                ? "border-blue-500 text-blue-600"
-                : "border-transparent text-gray-600 hover:text-gray-900"
-            }`}
-          >
-            📦 Stock
-          </button>
-          <button
-            onClick={() => setActiveTab("orders")}
-            className={`px-3 sm:px-6 py-2 sm:py-3 font-semibold border-b-2 transition cursor-pointer text-sm sm:text-base whitespace-nowrap ${
-              activeTab === "orders"
-                ? "border-blue-500 text-blue-600"
-                : "border-transparent text-gray-600 hover:text-gray-900"
-            }`}
-          >
-            📋 Orders
-          </button>
-          <button
-            onClick={() => setActiveTab("deliveries")}
-            className={`px-3 sm:px-6 py-2 sm:py-3 font-semibold border-b-2 transition cursor-pointer text-sm sm:text-base whitespace-nowrap ${
-              activeTab === "deliveries"
-                ? "border-blue-500 text-blue-600"
-                : "border-transparent text-gray-600 hover:text-gray-900"
-            }`}
-          >
-            🚗 Delivery
-          </button>
-        </div>
-
-        {/* STOCK MANAGEMENT TAB */}
-        {activeTab === "stock" && (
-          <div>
-            <div className="flex gap-2 sm:gap-4 mb-6 sm:mb-8 items-center flex-wrap">
-              <button
-                onClick={() => {
-                  setShowItemModal(true);
-                  setEditingId(null);
-                  setFormData({
-                    itemName: "",
-                    description: "",
-                    price: "",
-                    stock: "",
-                    category: "General",
-                    sku: "",
-                    image: "",
-                    specifications: [],
-                  });
-                }}
-                className="bg-blue-500 text-white px-3 sm:px-6 py-2 rounded hover:bg-blue-600 transition cursor-pointer text-sm sm:text-base font-medium"
-              >
-                + Add Item
-              </button>
-              <button
-                onClick={() => setShowImportForm(!showImportForm)}
-                className="bg-green-500 text-white px-3 sm:px-6 py-2 rounded hover:bg-green-600 transition cursor-pointer text-sm sm:text-base font-medium"
-              >
-                {showImportForm ? "Cancel" : "📥 Import"}
-              </button>
-              {selectedCount > 0 && (
-                <button
-                  onClick={() => handleBulkDelete(filteredItems)}
-                  className="bg-red-500 text-white px-3 sm:px-6 py-2 rounded hover:bg-red-600 transition cursor-pointer text-sm sm:text-base font-medium"
-                >
-                  🗑️ Delete Selected ({selectedCount})
-                </button>
-              )}
-
-              {/* Category Filter Dropdown */}
-              <select
-                value={selectedCategory}
-                onChange={(e) => setSelectedCategory(e.target.value)}
-                className="border border-gray-300 rounded px-2 sm:px-4 py-2 focus:outline-none focus:border-blue-500 bg-white cursor-pointer text-sm sm:text-base"
-              >
-                {getCategories().map((category) => (
-                  <option key={category} value={category}>
-                    {category === "All"
-                      ? "📂 All"
-                      : `📁 ${category}`}
-                  </option>
-                ))}
-              </select>
-
-              {/* Category badge showing current selection */}
-              {selectedCategory !== "All" && (
-                <div className="bg-blue-100 text-blue-800 px-2 sm:px-4 py-1 sm:py-2 rounded-full text-xs sm:text-sm font-semibold flex items-center gap-1 flex-shrink-0">
-                  <span className="line-clamp-1">{selectedCategory}</span>
-                  <button
-                    onClick={() => setSelectedCategory("All")}
-                    className="text-blue-600 hover:text-blue-800 font-bold cursor-pointer"
-                  >
-                    ✕
-                  </button>
-                </div>
-              )}
+    <section className="min-h-screen bg-slate-100 p-4 pb-10 lg:p-6">
+      <div className="mx-auto w-full max-w-[1600px] space-y-5">
+        <MotionHeader
+          initial={{ opacity: 0, y: 8 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.2 }}
+          className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm lg:p-5"
+        >
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.12em] text-indigo-700">Order Command Center</p>
+              <h1 className="mt-1 text-2xl font-bold text-slate-900">{user?.storeName || "Store"}</h1>
+              <div className="mt-2 inline-flex items-center gap-2 rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-700">
+                <span
+                  className={`h-2.5 w-2.5 rounded-full ${
+                    socketConnected ? "bg-emerald-500" : "bg-slate-400"
+                  }`}
+                />
+                {socketConnected ? "Realtime Connected" : "Realtime Reconnecting"}
+              </div>
             </div>
 
-            {/* Item Modal */}
-            <ItemModal
-              isOpen={showItemModal}
-              onClose={() => setShowItemModal(false)}
-              onSubmit={handleAddItem}
-              formData={formData}
-              onInputChange={handleInputChange}
-              editingId={editingId}
-              loading={loading}
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={refreshDashboard}
+                className="inline-flex h-12 items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-4 text-sm font-semibold text-slate-700 hover:bg-slate-100"
+              >
+                <RefreshCw size={16} />
+                Refresh
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setInventoryOpen(true)}
+                className="inline-flex h-12 items-center gap-2 rounded-xl bg-slate-900 px-4 text-sm font-semibold text-white hover:bg-slate-800"
+              >
+                <Boxes size={16} />
+                Inventory
+              </button>
+            </div>
+          </div>
+
+          <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+            <MetricCard
+              icon={Wallet}
+              label="Total Revenue Today"
+              value={formatCurrency(metrics.totalRevenueToday)}
+              hint="Delivered orders completed today"
             />
-
-            {/* Import Form */}
-            {showImportForm && (
-              <div className="bg-white p-4 sm:p-6 rounded-lg shadow mb-6 sm:mb-8">
-                <h2 className="text-lg sm:text-xl font-semibold mb-4">
-                  Import Items from Excel
-                </h2>
-                <div className="space-y-3 sm:space-y-4">
-                  <div className="bg-blue-50 p-3 sm:p-4 rounded border border-blue-200">
-                    <h3 className="font-semibold text-blue-900 mb-2 text-sm sm:text-base">
-                      📋 Supported Column Names:
-                    </h3>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs sm:text-sm text-blue-800">
-                      <div>
-                        <strong>Item Name:</strong> Item Name, itemName, name,
-                        Product Name
-                      </div>
-                      <div>
-                        <strong>Price:</strong> Price, price, Unit Price,
-                        unitPrice
-                      </div>
-                      <div>
-                        <strong>Stock:</strong> Stock, stock, Qty, quantity,
-                        Quantity
-                      </div>
-                      <div>
-                        <strong>Category:</strong> Category, category, Product
-                        Category
-                      </div>
-                      <div>
-                        <strong>Description:</strong> Description, description,
-                        desc, Product Description
-                      </div>
-                      <div>
-                        <strong>SKU:</strong> SKU, sku, code, Product SKU
-                        (optional)
-                      </div>
-                      <div>
-                        <strong>Image:</strong> Image, image, Image URL, imageUrl
-                        (optional)
-                      </div>
-                    </div>
-                  </div>
-
-                  <p className="text-gray-600 text-xs sm:text-sm">
-                    ✅ System will auto-generate SKU if not provided
-                  </p>
-                  <p className="text-gray-600 text-xs sm:text-sm">
-                    ✅ Works with any Excel format (XLSX, XLS, CSV)
-                  </p>
-                  <p className="text-gray-600 text-xs sm:text-sm">
-                    ✅ Duplicates will be handled automatically
-                  </p>
-
-                  <button
-                    onClick={downloadTemplate}
-                    className="bg-green-500 text-white px-3 sm:px-6 py-2 rounded hover:bg-green-600 transition cursor-pointer text-sm sm:text-base font-medium w-full sm:w-auto"
-                  >
-                    📥 Download Template
-                  </button>
-
-                  <input
-                    type="file"
-                    accept=".xlsx,.xls,.csv,.ods"
-                    onChange={handleFileUpload}
-                    disabled={loading}
-                    className="border p-2 sm:p-3 rounded w-full cursor-pointer text-sm"
-                  />
-
-                  {loading && (
-                    <div className="text-center text-blue-500 text-sm">
-                      Importing items... Please wait
-                    </div>
-                  )}
-                </div>
-              </div>
-            )}
-
-            {/* Items Table */}
-            <div className="bg-white rounded-lg shadow overflow-hidden">
-              <div className="overflow-x-auto">
-                {loading && items.length === 0 ? (
-                  <div className="p-4 sm:p-6 text-center text-gray-500 text-sm sm:text-base">
-                    Loading items...
-                  </div>
-                ) : items.length === 0 ? (
-                  <div className="p-4 sm:p-6 text-center text-gray-500 text-sm sm:text-base">
-                    No items added yet
-                  </div>
-                ) : getFilteredItems().length === 0 ? (
-                  <div className="p-4 sm:p-6 text-center text-gray-500 text-sm sm:text-base">
-                    No items in "{selectedCategory}" category
-                  </div>
-                ) : (
-                  <table className="w-full">
-                    <thead className="bg-gray-100">
-                      <tr>
-                        <th className="px-2 sm:px-6 py-2 sm:py-3 text-left">
-                          <input
-                            type="checkbox"
-                            checked={allFilteredSelected}
-                            onChange={() => handleToggleSelectAll(filteredItems)}
-                            className="h-4 w-4 cursor-pointer"
-                            aria-label="Select all items"
-                          />
-                        </th>
-                        <th className="px-2 sm:px-6 py-2 sm:py-3 text-left text-xs sm:text-sm font-semibold text-gray-900">
-                          Image
-                        </th>
-                        <th className="px-2 sm:px-6 py-2 sm:py-3 text-left text-xs sm:text-sm font-semibold text-gray-900">
-                          Item Name
-                        </th>
-                        <th className="px-2 sm:px-6 py-2 sm:py-3 text-left text-xs sm:text-sm font-semibold text-gray-900">
-                          Category
-                        </th>
-                        <th className="px-2 sm:px-6 py-2 sm:py-3 text-left text-xs sm:text-sm font-semibold text-gray-900">
-                          Price
-                        </th>
-                        <th className="px-2 sm:px-6 py-2 sm:py-3 text-left text-xs sm:text-sm font-semibold text-gray-900">
-                          Stock
-                        </th>
-                        <th className="px-2 sm:px-6 py-2 sm:py-3 text-left text-xs sm:text-sm font-semibold text-gray-900">
-                          SKU
-                        </th>
-                        <th className="px-2 sm:px-6 py-2 sm:py-3 text-left text-xs sm:text-sm font-semibold text-gray-900">
-                          Description
-                        </th>
-                        <th className="px-2 sm:px-6 py-2 sm:py-3 text-left text-xs sm:text-sm font-semibold text-gray-900">
-                          Actions
-                        </th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y">
-                      {filteredItems.map((item) => (
-                        <tr key={item._id} className="hover:bg-gray-50">
-                          <td className="px-2 sm:px-6 py-2 sm:py-4 text-sm">
-                            <input
-                              type="checkbox"
-                              checked={selectedItemIds.includes(item._id)}
-                              onChange={() => handleToggleSelectItem(item._id)}
-                              className="h-4 w-4 cursor-pointer"
-                              aria-label={`Select ${item.itemName}`}
-                            />
-                          </td>
-                          <td className="px-2 sm:px-6 py-2 sm:py-4 text-sm">
-                            {item.image ? (
-                              <img
-                                src={item.image}
-                                alt={item.itemName}
-                                className="h-10 w-10 sm:h-12 sm:w-12 rounded object-cover border"
-                              />
-                            ) : (
-                              <div className="h-10 w-10 sm:h-12 sm:w-12 rounded bg-gray-200 flex items-center justify-center text-xs text-gray-500">
-                                No img
-                              </div>
-                            )}
-                          </td>
-                          <td className="px-2 sm:px-6 py-2 sm:py-4 text-xs sm:text-sm text-gray-900">
-                            <span className="line-clamp-1">{item.itemName}</span>
-                          </td>
-                          <td className="px-2 sm:px-6 py-2 sm:py-4 text-xs sm:text-sm text-gray-600">
-                            <span className="line-clamp-1">{item.category}</span>
-                          </td>
-                          <td className="px-2 sm:px-6 py-2 sm:py-4 text-xs sm:text-sm font-semibold text-gray-900">
-                            ${item.price.toFixed(2)}
-                          </td>
-                          <td className="px-2 sm:px-6 py-2 sm:py-4 text-xs sm:text-sm">
-                            {editStockId === item._id ? (
-                              <div className="flex gap-1 sm:gap-2 flex-wrap">
-                                <input
-                                  type="number"
-                                  value={editStockValue}
-                                  onChange={(e) =>
-                                    setEditStockValue(e.target.value)
-                                  }
-                                  className="border p-1 rounded w-14 sm:w-16 text-xs"
-                                  autoFocus
-                                />
-                                <button
-                                  onClick={() =>
-                                    handleUpdateStock(item._id, editStockValue)
-                                  }
-                                  className="bg-green-500 text-white px-2 py-1 rounded text-xs whitespace-nowrap"
-                                >
-                                  Save
-                                </button>
-                                <button
-                                  onClick={() => setEditStockId(null)}
-                                  className="bg-gray-400 text-white px-2 py-1 rounded text-xs whitespace-nowrap"
-                                >
-                                  Cancel
-                                </button>
-                              </div>
-                            ) : (
-                              <div
-                                onClick={() => {
-                                  setEditStockId(item._id);
-                                  setEditStockValue(item.stock);
-                                }}
-                                className={`inline-block px-2 sm:px-3 py-1 rounded-full text-xs font-semibold cursor-pointer whitespace-nowrap ${getStockColor(
-                                  item.stock,
-                                )}`}
-                              >
-                                {item.stock} units
-                              </div>
-                            )}
-                          </td>
-                          <td className="px-2 sm:px-6 py-2 sm:py-4 text-xs sm:text-sm text-gray-600">
-                            <span className="line-clamp-1">{item.sku || "-"}</span>
-                          </td>
-                          <td className="px-2 sm:px-6 py-2 sm:py-4 text-xs sm:text-sm text-gray-600">
-                            <span className="line-clamp-2" title={item.description}>
-                              {item.description || "No description"}
-                            </span>
-                          </td>
-                          <td className="px-2 sm:px-6 py-2 sm:py-4 text-xs sm:text-sm space-x-1 sm:space-x-2 flex flex-nowrap items-center">
-                            <button
-                              onClick={() => handleEditItem(item)}
-                              className="text-blue-500 hover:text-blue-700 transition cursor-pointer p-1.5 rounded hover:bg-blue-50 flex items-center justify-center"
-                              title="Edit item"
-                            >
-                              <FiEdit2 size={18} />
-                            </button>
-                            <button
-                              onClick={() => handleDeleteItem(item._id)}
-                              className="text-red-500 hover:text-red-700 transition cursor-pointer p-1.5 rounded hover:bg-red-50 flex items-center justify-center"
-                              title="Delete item"
-                            >
-                              <FiTrash2 size={18} />
-                            </button>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                )}
-              </div>
-            </div>
+            <MetricCard
+              icon={ClipboardList}
+              label="Pending Orders"
+              value={String(metrics.pendingOrders)}
+              hint="Incoming and preparing orders"
+            />
+            <MetricCard
+              icon={PackageCheck}
+              label="Completed Deliveries"
+              value={String(metrics.completedDeliveries)}
+              hint="Delivered today"
+            />
           </div>
-        )}
+        </MotionHeader>
 
-        {/* ORDERS TAB */}
-        {activeTab === "orders" && (
-          <div className="bg-white rounded-lg shadow">
-            <div className="p-4 sm:p-6">
-              {loading ? (
-                <div className="text-center text-gray-500 text-sm">
-                  Loading orders...
-                </div>
-              ) : orders.length === 0 ? (
-                <div className="text-center text-gray-500 py-8 text-sm">
-                  No orders yet
-                </div>
-              ) : (
-                <div className="overflow-x-auto">
-                  <table className="w-full">
-                    <thead className="bg-gray-100">
-                      <tr>
-                        <th className="px-2 sm:px-6 py-2 sm:py-3 text-left text-xs sm:text-sm font-semibold">
-                          Order ID
-                        </th>
-                        <th className="px-2 sm:px-6 py-2 sm:py-3 text-left text-xs sm:text-sm font-semibold">
-                          Client
-                        </th>
-                        <th className="px-2 sm:px-6 py-2 sm:py-3 text-left text-xs sm:text-sm font-semibold">
-                          Amount
-                        </th>
-                        <th className="px-2 sm:px-6 py-2 sm:py-3 text-left text-xs sm:text-sm font-semibold">
-                          Status
-                        </th>
-                        <th className="px-2 sm:px-6 py-2 sm:py-3 text-left text-xs sm:text-sm font-semibold">
-                          Partner
-                        </th>
-                        <th className="px-2 sm:px-6 py-2 sm:py-3 text-left text-xs sm:text-sm font-semibold">
-                          Date
-                        </th>
-                        <th className="px-2 sm:px-6 py-2 sm:py-3 text-left text-xs sm:text-sm font-semibold">
-                          Actions
-                        </th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y">
-                      {orders.map((order) => (
-                        <tr key={order._id} className="hover:bg-gray-50">
-                          <td className="px-2 sm:px-6 py-2 sm:py-4 text-xs sm:text-sm font-medium text-gray-900">
-                            <span className="line-clamp-1">{order.orderId}</span>
-                          </td>
-                          <td className="px-2 sm:px-6 py-2 sm:py-4 text-xs sm:text-sm text-gray-600">
-                            <span className="line-clamp-1">{order.clientName}</span>
-                          </td>
-                          <td className="px-2 sm:px-6 py-2 sm:py-4 text-xs sm:text-sm font-semibold">
-                            ${order.totalAmount.toFixed(2)}
-                          </td>
-                          <td className="px-2 sm:px-6 py-2 sm:py-4 text-xs sm:text-sm">
-                            <span
-                              className={`px-2 sm:px-3 py-1 rounded-full text-xs font-semibold inline-block whitespace-nowrap ${getStatusColor(order.status)}`}
-                            >
-                              {ORDER_STATUS_LABELS[order.status] || order.status.replace(/_/g, " ")}
-                            </span>
-                          </td>
-                          <td className="px-2 sm:px-6 py-2 sm:py-4 text-xs sm:text-sm text-gray-600">
-                            <span className="line-clamp-1">
-                              {order.partnerId?.name || order.partnerName || "Unassigned"}
-                            </span>
-                          </td>
-                          <td className="px-2 sm:px-6 py-2 sm:py-4 text-xs sm:text-sm text-gray-600">
-                            <span className="line-clamp-1">{new Date(order.createdAt).toLocaleDateString()}</span>
-                          </td>
-                          <td className="px-2 sm:px-6 py-2 sm:py-4 text-xs sm:text-sm">
-                            <div className="flex flex-wrap gap-2">
-                              {order.status === "pending" && (
-                                <>
-                                  <button
-                                    onClick={() =>
-                                      handleOrderStatusUpdate(order._id, "confirmed")
-                                    }
-                                    className="bg-blue-500 text-white px-2 py-1 rounded text-xs hover:bg-blue-600"
-                                  >
-                                    Confirm
-                                  </button>
-                                  <button
-                                    onClick={() =>
-                                      handleOrderStatusUpdate(order._id, "cancelled")
-                                    }
-                                    className="bg-red-500 text-white px-2 py-1 rounded text-xs hover:bg-red-600"
-                                  >
-                                    Reject
-                                  </button>
-                                </>
-                              )}
-
-                              {order.status === "confirmed" && !order.partnerId && (
-                                <>
-                                  <select
-                                    value={selectedPartnerByOrder[order._id] || ""}
-                                    onChange={(e) =>
-                                      setSelectedPartnerByOrder((prev) => ({
-                                        ...prev,
-                                        [order._id]: e.target.value,
-                                      }))
-                                    }
-                                    className="border border-gray-300 rounded px-2 py-1 text-xs"
-                                  >
-                                    <option value="">Select Partner</option>
-                                    {assignablePartners
-                                      .filter((partner) => partner.isAvailable)
-                                      .map((partner) => (
-                                        <option key={partner._id} value={partner._id}>
-                                          {partner.name} ({partner.vehicle})
-                                        </option>
-                                      ))}
-                                  </select>
-                                  <button
-                                    onClick={() => handleAssignSelectedPartner(order._id)}
-                                    className="bg-green-500 text-white px-2 py-1 rounded text-xs hover:bg-green-600"
-                                  >
-                                    Assign Selected
-                                  </button>
-                                </>
-                              )}
-
-                              {order.status !== "pending" &&
-                                !(order.status === "confirmed" && !order.partnerId) && (
-                                  <span className="text-gray-400 text-xs">No action</span>
-                                )}
-                            </div>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-
-        {/* DELIVERY PARTNERS TAB */}
-        {activeTab === "deliveries" && (
-          <div>
-            {loading ? (
-              <div className="text-center text-gray-500 py-8 text-sm">
-                Loading partners...
+        <div className="grid gap-4 xl:grid-cols-3">
+          <ColumnShell
+            title="Incoming"
+            subtitle="New orders awaiting store confirmation"
+            count={incomingOrders.length}
+          >
+            {loadingOrders ? (
+              <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600">
+                Loading incoming orders...
               </div>
-            ) : partners.length === 0 ? (
-              <div className="bg-white rounded-lg shadow p-4 sm:p-6 text-center text-gray-500 text-sm">
-                No delivery partners yet
+            ) : incomingOrders.length === 0 ? (
+              <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 p-6 text-center text-sm text-slate-600">
+                No incoming orders right now.
               </div>
             ) : (
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6">
-                {partners.map((partner) => (
-                  <div
-                    key={partner.id}
-                    className="bg-white rounded-lg shadow p-4 sm:p-6"
+              incomingOrders.map((order) => {
+                const badge = getStatusBadge(order);
+                const orderAgeMinutes = minutesFromNow(order.createdAt);
+
+                return (
+                  <MotionArticle
+                    key={order._id}
+                    layout
+                    initial={{ opacity: 0, y: 8 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ duration: 0.16 }}
+                    className="rounded-xl border border-slate-200 bg-white p-4"
                   >
-                    <h3 className="text-base sm:text-lg font-semibold text-gray-900 mb-2 line-clamp-2">
-                      {partner.name}
-                    </h3>
-                    <div className="space-y-1 sm:space-y-2 text-xs sm:text-sm text-gray-600">
-                      <p>
-                        <strong>📞 Phone:</strong> <span className="line-clamp-1">{partner.phone}</span>
-                      </p>
-                      <p>
-                        <strong>📧 Email:</strong> <span className="line-clamp-1">{partner.email}</span>
-                      </p>
-                      <p>
-                        <strong>🚗 Vehicle:</strong> <span className="line-clamp-1">{partner.vehicle}</span>
-                      </p>
-                      <div className="border-t pt-2 sm:pt-3 mt-2 sm:mt-3">
-                        <p className="font-semibold text-gray-900">
-                          Total Deliveries:{" "}
-                          <span className="text-blue-600">
-                            {partner.totalDeliveries}
-                          </span>
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-semibold text-slate-900">{order.orderId || order._id}</p>
+                        <p className="text-xs text-slate-500">{order.clientName || "Customer"}</p>
+                      </div>
+                      <span className={`rounded-full px-3 py-1 text-xs font-semibold ${badge.className}`}>
+                        {badge.label}
+                      </span>
+                    </div>
+
+                    <div className="mt-3 grid grid-cols-2 gap-2 text-xs text-slate-600">
+                      <div className="rounded-lg bg-slate-50 p-2">
+                        <p>Amount</p>
+                        <p className="mt-1 text-sm font-semibold text-slate-900">{formatCurrency(order.totalAmount)}</p>
+                      </div>
+                      <div className="rounded-lg bg-slate-50 p-2">
+                        <p>Items</p>
+                        <p className="mt-1 text-sm font-semibold text-slate-900">{order.items?.length || 0}</p>
+                      </div>
+                    </div>
+
+                    <div className="mt-3 flex items-center gap-2 text-xs text-slate-500">
+                      <AlertTriangle size={13} className={orderAgeMinutes >= OVERDUE_MINUTES ? "text-rose-600" : "text-slate-400"} />
+                      {orderAgeMinutes} min since placed
+                    </div>
+
+                    <div className="mt-3 grid grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        disabled={updatingOrderId === order._id}
+                        onClick={() => handleAcceptOrder(order._id)}
+                        className="inline-flex h-12 items-center justify-center rounded-xl bg-emerald-600 px-3 text-sm font-semibold text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60 animate-pulse"
+                      >
+                        {updatingOrderId === order._id ? "Accepting..." : "Accept"}
+                      </button>
+                      <button
+                        type="button"
+                        disabled={updatingOrderId === order._id}
+                        onClick={() => handleDeclineOrder(order._id)}
+                        className="inline-flex h-12 items-center justify-center rounded-xl border border-rose-200 bg-rose-50 px-3 text-sm font-semibold text-rose-700 transition hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        Decline
+                      </button>
+                    </div>
+                  </MotionArticle>
+                );
+              })
+            )}
+          </ColumnShell>
+
+          <ColumnShell
+            title="Preparing"
+            subtitle="Orders in kitchen and packaging workflow"
+            count={preparingOrders.length}
+          >
+            {loadingOrders ? (
+              <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600">
+                Loading preparing orders...
+              </div>
+            ) : preparingOrders.length === 0 ? (
+              <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 p-6 text-center text-sm text-slate-600">
+                No preparing orders currently.
+              </div>
+            ) : (
+              preparingOrders.map((order) => {
+                const badge = getStatusBadge(order);
+                const partnerMeta = resolveOrderPartner(order);
+                const selectedPartnerId = selectedPartnerByOrder[order._id] || partnerMeta.partnerId;
+
+                return (
+                  <MotionArticle
+                    key={order._id}
+                    layout
+                    initial={{ opacity: 0, y: 8 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ duration: 0.16 }}
+                    className="rounded-xl border border-slate-200 bg-white p-4"
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-semibold text-slate-900">{order.orderId || order._id}</p>
+                        <p className="text-xs text-slate-500">{order.clientName || "Customer"}</p>
+                      </div>
+                      <span className={`rounded-full px-3 py-1 text-xs font-semibold ${badge.className}`}>
+                        {badge.label}
+                      </span>
+                    </div>
+
+                    <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
+                      <p className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Assign Partner</p>
+                      <select
+                        value={selectedPartnerId}
+                        onChange={(event) =>
+                          setSelectedPartnerByOrder((currentMap) => ({
+                            ...currentMap,
+                            [order._id]: event.target.value,
+                          }))
+                        }
+                        className="mt-2 h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-800 outline-none focus:border-indigo-400"
+                        disabled={loadingPartners}
+                      >
+                        <option value="">Select available partner</option>
+                        {availablePartnerOptions.map((partner) => (
+                          <option key={partner._id} value={partner._id}>
+                            {partner.name} ({partner.vehicle})
+                          </option>
+                        ))}
+                      </select>
+                      {!availablePartnerOptions.length && !loadingPartners ? (
+                        <p className="mt-2 text-xs text-amber-700">No available partners at the moment.</p>
+                      ) : null}
+                    </div>
+
+                    <button
+                      type="button"
+                      disabled={updatingOrderId === order._id || !selectedPartnerId}
+                      onClick={() => handleMarkReady(order)}
+                      className="mt-3 inline-flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-amber-500 px-3 text-sm font-semibold text-white transition hover:bg-amber-600 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      <CheckCircle2 size={16} />
+                      {updatingOrderId === order._id ? "Updating..." : "Mark as Ready"}
+                    </button>
+                  </MotionArticle>
+                );
+              })
+            )}
+          </ColumnShell>
+
+          <ColumnShell
+            title="Dispatched / Ready"
+            subtitle="Orders awaiting pickup or already with partner"
+            count={dispatchedOrders.length}
+          >
+            {loadingOrders ? (
+              <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600">
+                Loading dispatched orders...
+              </div>
+            ) : dispatchedOrders.length === 0 ? (
+              <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 p-6 text-center text-sm text-slate-600">
+                No dispatched orders right now.
+              </div>
+            ) : (
+              dispatchedOrders.map((order) => {
+                const badge = getStatusBadge(order);
+                const partnerMeta = resolveOrderPartner(order);
+                const currentPartnerLocation = toLocation(order.partnerCurrentLocation);
+                const destinationLocation = resolveMapDestination(order, storeLocation);
+                const canShowMap = Boolean(currentPartnerLocation && destinationLocation);
+
+                return (
+                  <MotionArticle
+                    key={order._id}
+                    layout
+                    initial={{ opacity: 0, y: 8 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ duration: 0.16 }}
+                    className="rounded-xl border border-slate-200 bg-white p-4"
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-semibold text-slate-900">{order.orderId || order._id}</p>
+                        <p className="mt-1 inline-flex items-center gap-1 text-xs text-slate-600">
+                          <Truck size={12} />
+                          {partnerMeta.name} - {partnerMeta.vehicle}
                         </p>
-                        <p className="font-semibold text-gray-900">
-                          Total Amount:{" "}
-                          <span className="text-green-600">
-                            ${partner.totalAmount.toFixed(2)}
-                          </span>
+                      </div>
+                      <span className={`rounded-full px-3 py-1 text-xs font-semibold ${badge.className}`}>
+                        {badge.label}
+                      </span>
+                    </div>
+
+                    {canShowMap ? (
+                      <div className="mt-3 space-y-2">
+                        <LiveRouteMap
+                          startLocation={currentPartnerLocation}
+                          currentLocation={currentPartnerLocation}
+                          endLocation={destinationLocation}
+                          heightClassName="h-52"
+                          currentMarkerStyle="bike"
+                        />
+                        <p className="text-xs text-slate-500">
+                          {order.status === "shipped"
+                            ? "Partner is moving toward store pickup point."
+                            : "Partner route is tracked in real time."}
                         </p>
+                      </div>
+                    ) : (
+                      <div className="mt-3 rounded-lg border border-dashed border-slate-300 bg-slate-50 p-3 text-xs text-slate-600">
+                        Partner tracking map is unavailable until location data is received.
+                      </div>
+                    )}
+                  </MotionArticle>
+                );
+              })
+            )}
+          </ColumnShell>
+        </div>
+      </div>
+
+      <AnimatePresence>
+        {inventoryOpen && (
+          <>
+            <MotionDiv
+              className="fixed inset-0 z-40 bg-slate-900/50 backdrop-blur-[2px]"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setInventoryOpen(false)}
+            />
+
+            <MotionAside
+              initial={{ opacity: 0, y: 24, scale: 0.99 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: 24, scale: 0.99 }}
+              transition={{ type: "spring", stiffness: 240, damping: 24 }}
+              className="fixed inset-0 z-50 flex min-h-screen flex-col bg-slate-100"
+            >
+              <div className="flex items-start justify-between gap-3 border-b border-slate-200 bg-white/95 px-4 py-3 backdrop-blur lg:px-6">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-[0.1em] text-indigo-700">Inventory Workspace</p>
+                  <h3 className="mt-1 text-lg font-semibold text-slate-900">Stock Management</h3>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setInventoryOpen(false)}
+                  className="inline-flex h-9 w-9 items-center justify-center rounded-lg text-slate-600 hover:bg-slate-100"
+                >
+                  <X size={16} />
+                </button>
+              </div>
+
+              <div className="grid min-h-0 flex-1 lg:grid-cols-[420px_minmax(0,1fr)]">
+                <div className="min-h-0 overflow-y-auto border-b border-slate-200 bg-white p-4 lg:border-b-0 lg:border-r lg:p-5">
+                  <div className="space-y-3">
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => excelInputRef.current?.click()}
+                        disabled={importingItems}
+                        className="inline-flex h-10 flex-1 items-center justify-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 text-xs font-semibold text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        <Upload size={14} />
+                        {importingItems ? "Importing..." : "Import Excel"}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleDownloadInventoryTemplate}
+                        className="inline-flex h-10 flex-1 items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                      >
+                        <Download size={14} />
+                        Template
+                      </button>
+                      <input
+                        ref={excelInputRef}
+                        type="file"
+                        accept=".xlsx,.xls,.csv,.ods"
+                        className="hidden"
+                        onChange={handleExcelImport}
+                      />
+                    </div>
+
+                    <form onSubmit={handleAddItem} className="space-y-2 rounded-xl border border-slate-200 bg-slate-50 p-3">
+                      <div className="flex items-center gap-2">
+                        <PackagePlus size={15} className="text-slate-600" />
+                        <p className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-600">Add Item</p>
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <input
+                          type="text"
+                          placeholder="Item name"
+                          value={newItemForm.itemName}
+                          onChange={(event) =>
+                            setNewItemForm((currentForm) => ({ ...currentForm, itemName: event.target.value }))
+                          }
+                          className="col-span-2 h-9 rounded-lg border border-slate-200 bg-white px-3 text-xs outline-none focus:border-indigo-400"
+                        />
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          placeholder="Price"
+                          value={newItemForm.price}
+                          onChange={(event) =>
+                            setNewItemForm((currentForm) => ({ ...currentForm, price: event.target.value }))
+                          }
+                          className="h-9 rounded-lg border border-slate-200 bg-white px-3 text-xs outline-none focus:border-indigo-400"
+                        />
+                        <input
+                          type="number"
+                          min="0"
+                          step="1"
+                          placeholder="Stock"
+                          value={newItemForm.stock}
+                          onChange={(event) =>
+                            setNewItemForm((currentForm) => ({ ...currentForm, stock: event.target.value }))
+                          }
+                          className="h-9 rounded-lg border border-slate-200 bg-white px-3 text-xs outline-none focus:border-indigo-400"
+                        />
+                        <input
+                          type="text"
+                          placeholder="Category"
+                          value={newItemForm.category}
+                          onChange={(event) =>
+                            setNewItemForm((currentForm) => ({ ...currentForm, category: event.target.value }))
+                          }
+                          className="h-9 rounded-lg border border-slate-200 bg-white px-3 text-xs outline-none focus:border-indigo-400"
+                        />
+                        <input
+                          type="text"
+                          placeholder="SKU (optional)"
+                          value={newItemForm.sku}
+                          onChange={(event) =>
+                            setNewItemForm((currentForm) => ({ ...currentForm, sku: event.target.value }))
+                          }
+                          className="h-9 rounded-lg border border-slate-200 bg-white px-3 text-xs outline-none focus:border-indigo-400"
+                        />
+                      </div>
+                      <button
+                        type="submit"
+                        disabled={addingItem}
+                        className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-lg bg-slate-900 px-3 text-xs font-semibold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        {addingItem ? <Loader2 size={14} className="animate-spin" /> : <PackagePlus size={14} />}
+                        {addingItem ? "Adding..." : "Add Inventory Item"}
+                      </button>
+                    </form>
+
+                    <div className="grid grid-cols-3 gap-2 text-center text-xs">
+                      <div className="rounded-lg bg-slate-100 p-2">
+                        <p className="text-slate-500">Items</p>
+                        <p className="mt-1 text-sm font-semibold text-slate-900">{inventorySummary.total}</p>
+                      </div>
+                      <div className="rounded-lg bg-emerald-50 p-2">
+                        <p className="text-emerald-700">In Stock</p>
+                        <p className="mt-1 text-sm font-semibold text-emerald-800">{inventorySummary.inStock}</p>
+                      </div>
+                      <div className="rounded-lg bg-rose-50 p-2">
+                        <p className="text-rose-700">Out</p>
+                        <p className="mt-1 text-sm font-semibold text-rose-800">{inventorySummary.outOfStock}</p>
                       </div>
                     </div>
                   </div>
-                ))}
+                </div>
+
+                <div className="min-h-0 flex flex-col overflow-hidden p-4 lg:p-5">
+                  <div className="mb-3 grid grid-cols-1 gap-2 sm:grid-cols-3">
+                    <label className="relative sm:col-span-2">
+                      <Search size={14} className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-slate-400" />
+                      <input
+                        type="text"
+                        placeholder="Search items..."
+                        value={inventoryQuery}
+                        onChange={(event) => setInventoryQuery(event.target.value)}
+                        className="h-10 w-full rounded-lg border border-slate-200 bg-white pl-8 pr-2 text-sm outline-none focus:border-indigo-400"
+                      />
+                    </label>
+                    <select
+                      value={inventoryCategory}
+                      onChange={(event) => setInventoryCategory(event.target.value)}
+                      className="h-10 rounded-lg border border-slate-200 bg-white px-2 text-sm outline-none focus:border-indigo-400"
+                    >
+                      {inventoryCategories.map((category) => (
+                        <option key={category} value={category}>
+                          {category}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="min-h-0 flex-1 overflow-auto rounded-xl border border-slate-200 bg-white">
+                    {loadingItems ? (
+                      <div className="p-6 text-sm text-slate-600">Loading inventory...</div>
+                    ) : filteredInventoryItems.length === 0 ? (
+                      <div className="p-8 text-center text-sm text-slate-600">No matching inventory items found.</div>
+                    ) : (
+                      <table className="min-w-full">
+                        <thead className="sticky top-0 z-10 bg-slate-50">
+                          <tr className="text-left text-xs font-semibold uppercase tracking-[0.06em] text-slate-500">
+                            <th className="px-3 py-2">Item</th>
+                            <th className="px-3 py-2">Category</th>
+                            <th className="px-3 py-2">Price</th>
+                            <th className="px-3 py-2">Stock</th>
+                            <th className="px-3 py-2">Status</th>
+                            <th className="px-3 py-2">Actions</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-200">
+                          {filteredInventoryItems.map((item) => {
+                            const itemId = String(item._id);
+                            const isInStock = Number(item.stock || 0) > 0;
+
+                            return (
+                              <tr key={itemId} className="text-sm text-slate-700">
+                                <td className="px-3 py-3">
+                                  <p className="font-semibold text-slate-900">{item.itemName}</p>
+                                  <p className="text-xs text-slate-500">SKU: {item.sku || "-"}</p>
+                                </td>
+                                <td className="px-3 py-3 text-xs">{item.category || "General"}</td>
+                                <td className="px-3 py-3">{formatCurrency(item.price)}</td>
+                                <td className="px-3 py-3">{item.stock}</td>
+                                <td className="px-3 py-3">
+                                  {updatingItemId === itemId ? (
+                                    <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-600">
+                                      <Loader2 size={12} className="animate-spin" />
+                                      Updating
+                                    </span>
+                                  ) : isInStock ? (
+                                    <span className="rounded-full bg-emerald-100 px-2 py-1 text-xs font-semibold text-emerald-700">In Stock</span>
+                                  ) : (
+                                    <span className="rounded-full bg-rose-100 px-2 py-1 text-xs font-semibold text-rose-700">Out of Stock</span>
+                                  )}
+                                </td>
+                                <td className="px-3 py-3">
+                                  <div className="flex items-center gap-2">
+                                    <button
+                                      type="button"
+                                      disabled={updatingItemId === itemId || Number(item.stock || 0) <= 0}
+                                      onClick={() => handleAdjustItemStock(item, -1)}
+                                      className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-slate-200 text-xs font-semibold text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+                                    >
+                                      -
+                                    </button>
+                                    <button
+                                      type="button"
+                                      disabled={updatingItemId === itemId}
+                                      onClick={() => handleAdjustItemStock(item, 1)}
+                                      className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-slate-200 text-xs font-semibold text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+                                    >
+                                      +
+                                    </button>
+                                    <button
+                                      type="button"
+                                      disabled={updatingItemId === itemId}
+                                      onClick={() => handleToggleItemStock(item)}
+                                      className={`relative inline-flex h-6 w-11 items-center rounded-full transition ${
+                                        isInStock ? "bg-emerald-500" : "bg-slate-300"
+                                      } ${updatingItemId === itemId ? "opacity-60" : ""}`}
+                                      aria-label={`Toggle stock for ${item.itemName}`}
+                                    >
+                                      <span
+                                        className={`inline-block h-5 w-5 transform rounded-full bg-white transition ${
+                                          isInStock ? "translate-x-5" : "translate-x-1"
+                                        }`}
+                                      />
+                                    </button>
+                                  </div>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    )}
+                  </div>
+                </div>
               </div>
-            )}
-          </div>
+            </MotionAside>
+          </>
         )}
-      </div>
-    </div>
+      </AnimatePresence>
+    </section>
   );
 };
 

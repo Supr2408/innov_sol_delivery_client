@@ -9,6 +9,7 @@ import partnerRoute from './routes/partnerRoute.js';
 import storeRoute from './routes/storeRoute.js';
 import itemRoute from './routes/itemRoute.js';
 import orderRoute from './routes/orderRoute.js';
+import mapRoute from './routes/mapRoute.js';
 import { initSocket } from './socket.js';
 
 dotenv.config();
@@ -31,6 +32,7 @@ app.use('/api/partners', partnerRoute);
 app.use('/api/stores', storeRoute);
 app.use('/api/items', itemRoute);
 app.use('/api/orders', orderRoute);
+app.use('/api/maps', mapRoute);
 
 initSocket(server);
 

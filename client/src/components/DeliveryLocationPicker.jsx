@@ -1,89 +1,65 @@
 import { useEffect, useRef, useState } from "react";
 
 const DEFAULT_CENTER = { lat: 37.7749, lng: -122.4194 };
+const CARTO_VOYAGER_STYLE_URL = "https://basemaps.cartocdn.com/gl/voyager-gl-style/style.json";
 
-const ensureCustomPinStyles = () => {
-  if (document.getElementById("codex-red-pin-style")) return;
-
-  const style = document.createElement("style");
-  style.id = "codex-red-pin-style";
-  style.textContent = `
-    .codex-red-pin {
-      position: relative;
-      width: 22px;
-      height: 22px;
-      background: #e23744;
-      border: 2px solid #ffffff;
-      border-radius: 50% 50% 50% 0;
-      transform: rotate(-45deg);
-      box-shadow: 0 3px 8px rgba(0, 0, 0, 0.35);
-    }
-    .codex-red-pin::after {
-      content: "";
-      position: absolute;
-      width: 8px;
-      height: 8px;
-      border-radius: 50%;
-      background: #ffffff;
-      top: 5px;
-      left: 5px;
-    }
-  `;
-  document.head.appendChild(style);
-};
-
-const createRedPinIcon = (L) =>
-  L.divIcon({
-    html: '<div class="codex-red-pin"></div>',
-    className: "",
-    iconSize: [22, 22],
-    iconAnchor: [11, 22],
-  });
-
-const loadLeaflet = () =>
+const loadMapLibre = () =>
   new Promise((resolve, reject) => {
-    if (window.L) {
-      resolve(window.L);
+    if (window.maplibregl) {
+      resolve(window.maplibregl);
       return;
     }
 
-    ensureCustomPinStyles();
-
-    const existingScript = document.querySelector("script[data-leaflet-script]");
-    const existingStyles = document.querySelector("link[data-leaflet-style]");
-
-    const handleResolve = () => {
-      if (window.L) resolve(window.L);
-      else reject(new Error("Leaflet failed to initialize"));
-    };
-
-    if (!existingStyles) {
-      const style = document.createElement("link");
-      style.rel = "stylesheet";
-      style.href = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.css";
-      style.dataset.leafletStyle = "true";
-      document.head.appendChild(style);
+    if (window.__mapLibreLoadingPromise) {
+      window.__mapLibreLoadingPromise.then(resolve).catch(reject);
+      return;
     }
 
-    if (existingScript) {
-      existingScript.addEventListener("load", handleResolve);
-      existingScript.addEventListener("error", () =>
-        reject(new Error("Leaflet script failed to load")),
+    window.__mapLibreLoadingPromise = new Promise((internalResolve, internalReject) => {
+      const existingStyleElement = document.querySelector("link[data-maplibre-style]");
+      const existingScriptElement = document.querySelector("script[data-maplibre-script]");
+
+      const finalizeMapLibreLoad = () => {
+        if (window.maplibregl) {
+          internalResolve(window.maplibregl);
+          return;
+        }
+
+        internalReject(new Error("MapLibre failed to initialize"));
+      };
+
+      if (!existingStyleElement) {
+        const styleElement = document.createElement("link");
+        styleElement.rel = "stylesheet";
+        styleElement.href = "https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css";
+        styleElement.dataset.maplibreStyle = "true";
+        document.head.appendChild(styleElement);
+      }
+
+      if (existingScriptElement) {
+        existingScriptElement.addEventListener("load", finalizeMapLibreLoad);
+        existingScriptElement.addEventListener("error", () =>
+          internalReject(new Error("MapLibre script failed to load")),
+        );
+        return;
+      }
+
+      const scriptElement = document.createElement("script");
+      scriptElement.src = "https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js";
+      scriptElement.async = true;
+      scriptElement.dataset.maplibreScript = "true";
+      scriptElement.addEventListener("load", finalizeMapLibreLoad);
+      scriptElement.addEventListener("error", () =>
+        internalReject(new Error("MapLibre script failed to load")),
       );
-      return;
-    }
+      document.body.appendChild(scriptElement);
+    });
 
-    const script = document.createElement("script");
-    script.src = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.js";
-    script.async = true;
-    script.dataset.leafletScript = "true";
-    script.addEventListener("load", handleResolve);
-    script.addEventListener("error", () => reject(new Error("Leaflet script failed to load")));
-    document.body.appendChild(script);
+    window.__mapLibreLoadingPromise.then(resolve).catch(reject);
   });
 
 const buildPhotonLabel = (properties = {}) => {
-  const parts = [
+  const labelParts = [
     properties.name,
     properties.housenumber && properties.street
       ? `${properties.housenumber} ${properties.street}`
@@ -94,7 +70,7 @@ const buildPhotonLabel = (properties = {}) => {
     properties.country,
   ].filter(Boolean);
 
-  return parts.join(", ");
+  return labelParts.join(", ");
 };
 
 const searchPhoton = async (queryText) => {
@@ -114,13 +90,12 @@ const searchPhoton = async (queryText) => {
 
   return features
     .map((feature) => {
-      const coords = feature?.geometry?.coordinates;
-      const lng = Array.isArray(coords) ? Number(coords[0]) : NaN;
-      const lat = Array.isArray(coords) ? Number(coords[1]) : NaN;
-      const label = buildPhotonLabel(feature?.properties);
+      const coordinates = feature?.geometry?.coordinates;
+      const lng = Array.isArray(coordinates) ? Number(coordinates[0]) : NaN;
+      const lat = Array.isArray(coordinates) ? Number(coordinates[1]) : NaN;
 
       return {
-        label,
+        label: buildPhotonLabel(feature?.properties),
         lat,
         lng,
       };
@@ -146,15 +121,88 @@ const reversePhoton = async (lat, lng) => {
   return buildPhotonLabel(feature?.properties);
 };
 
+const searchMapTiler = async (queryText, mapTilerApiKey) => {
+  const query = new URLSearchParams({
+    key: mapTilerApiKey,
+    language: "en",
+    autocomplete: "true",
+    limit: "6",
+  });
+
+  const encodedQueryText = encodeURIComponent(queryText);
+  const response = await fetch(`https://api.maptiler.com/geocoding/${encodedQueryText}.json?${query}`);
+  if (!response.ok) {
+    throw new Error("MapTiler search failed");
+  }
+
+  const data = await response.json();
+  const features = Array.isArray(data?.features) ? data.features : [];
+
+  return features
+    .map((feature) => {
+      const centerCoordinates = feature?.center;
+      const lng = Array.isArray(centerCoordinates) ? Number(centerCoordinates[0]) : NaN;
+      const lat = Array.isArray(centerCoordinates) ? Number(centerCoordinates[1]) : NaN;
+      const label = feature?.place_name || feature?.text || "";
+
+      return {
+        label,
+        lat,
+        lng,
+      };
+    })
+    .filter((result) => result.label && Number.isFinite(result.lat) && Number.isFinite(result.lng));
+};
+
+const reverseMapTiler = async (lat, lng, mapTilerApiKey) => {
+  const query = new URLSearchParams({
+    key: mapTilerApiKey,
+    language: "en",
+    limit: "1",
+  });
+
+  const response = await fetch(`https://api.maptiler.com/geocoding/${lng},${lat}.json?${query}`);
+  if (!response.ok) {
+    throw new Error("MapTiler reverse geocoding failed");
+  }
+
+  const data = await response.json();
+  const feature = Array.isArray(data?.features) ? data.features[0] : null;
+  return feature?.place_name || feature?.text || "";
+};
+
+const createDeliveryPinElement = () => {
+  const markerElement = document.createElement("div");
+  markerElement.style.width = "18px";
+  markerElement.style.height = "18px";
+  markerElement.style.borderRadius = "9999px";
+  markerElement.style.background = "#e23744";
+  markerElement.style.border = "3px solid #ffffff";
+  markerElement.style.boxShadow = "0 0 0 2px rgba(226,55,68,0.25), 0 10px 20px rgba(0,0,0,0.22)";
+  return markerElement;
+};
+
 const DeliveryLocationPicker = ({ value, onChange, onAddressResolved }) => {
+  const mapTilerApiKey = import.meta.env.VITE_MAPTILER_API_KEY;
+  const mapTilerStyleUrl = mapTilerApiKey
+    ? `https://api.maptiler.com/maps/streets-v2/style.json?key=${mapTilerApiKey}`
+    : "";
+  const mapStyleUrl =
+    import.meta.env.VITE_LOCATION_PICKER_MAP_STYLE_URL ||
+    import.meta.env.VITE_MAP_STYLE_URL ||
+    mapTilerStyleUrl ||
+    CARTO_VOYAGER_STYLE_URL;
+
   const mapContainerRef = useRef(null);
   const searchContainerRef = useRef(null);
-  const mapRef = useRef(null);
-  const markerRef = useRef(null);
+  const mapInstanceRef = useRef(null);
+  const markerInstanceRef = useRef(null);
   const searchTimeoutRef = useRef(null);
   const searchRequestIdRef = useRef(0);
   const suppressSearchRef = useRef(false);
   const onAddressResolvedRef = useRef(onAddressResolved);
+  const onChangeRef = useRef(onChange);
+  const initialSelectedLocationRef = useRef(value);
 
   const [mapReady, setMapReady] = useState(false);
   const [mapError, setMapError] = useState("");
@@ -170,6 +218,10 @@ const DeliveryLocationPicker = ({ value, onChange, onAddressResolved }) => {
   }, [onAddressResolved]);
 
   useEffect(() => {
+    onChangeRef.current = onChange;
+  }, [onChange]);
+
+  useEffect(() => {
     const handleOutsideClick = (event) => {
       if (!searchContainerRef.current) return;
       if (!searchContainerRef.current.contains(event.target)) {
@@ -182,75 +234,94 @@ const DeliveryLocationPicker = ({ value, onChange, onAddressResolved }) => {
   }, []);
 
   useEffect(() => {
-    let mounted = true;
+    let isMounted = true;
 
-    const initMap = async () => {
-      if (!mapContainerRef.current || mapRef.current) return;
+    const initializeMap = async () => {
+      if (!mapContainerRef.current || mapInstanceRef.current) return;
 
       try {
-        const L = await loadLeaflet();
-        if (!mounted || !mapContainerRef.current) return;
+        const maplibre = await loadMapLibre();
+        if (!isMounted || !mapContainerRef.current) return;
 
-        const startPosition =
-          value && Number.isFinite(value.lat) && Number.isFinite(value.lng)
-            ? [value.lat, value.lng]
-            : [DEFAULT_CENTER.lat, DEFAULT_CENTER.lng];
+        const initialSelectedLocation = initialSelectedLocationRef.current;
+        const initialLocation =
+          initialSelectedLocation &&
+          Number.isFinite(initialSelectedLocation.lat) &&
+          Number.isFinite(initialSelectedLocation.lng)
+            ? { lat: Number(initialSelectedLocation.lat), lng: Number(initialSelectedLocation.lng) }
+            : DEFAULT_CENTER;
 
-        const map = L.map(mapContainerRef.current).setView(startPosition, 13);
-        L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-          attribution: "&copy; OpenStreetMap contributors",
-          maxZoom: 19,
-        }).addTo(map);
+        const mapInstance = new maplibre.Map({
+          container: mapContainerRef.current,
+          style: mapStyleUrl,
+          center: [initialLocation.lng, initialLocation.lat],
+          zoom: 14,
+        });
 
-        markerRef.current = L.marker(startPosition, {
-          icon: createRedPinIcon(L),
+        mapInstance.addControl(new maplibre.NavigationControl({ showCompass: false }), "top-right");
+
+        const markerInstance = new maplibre.Marker({
+          element: createDeliveryPinElement(),
           draggable: true,
-        }).addTo(map);
+        })
+          .setLngLat([initialLocation.lng, initialLocation.lat])
+          .addTo(mapInstance);
 
-        markerRef.current.on("dragend", () => {
-          const position = markerRef.current.getLatLng();
-          onChange({
-            lat: Number(position.lat.toFixed(6)),
-            lng: Number(position.lng.toFixed(6)),
+        markerInstance.on("dragend", () => {
+          const markerPosition = markerInstance.getLngLat();
+          onChangeRef.current({
+            lat: Number(markerPosition.lat.toFixed(6)),
+            lng: Number(markerPosition.lng.toFixed(6)),
           });
         });
 
-        map.on("click", (event) => {
-          const lat = Number(event.latlng.lat.toFixed(6));
-          const lng = Number(event.latlng.lng.toFixed(6));
-          onChange({ lat, lng });
+        mapInstance.on("click", (event) => {
+          const lat = Number(event.lngLat.lat.toFixed(6));
+          const lng = Number(event.lngLat.lng.toFixed(6));
+          onChangeRef.current({ lat, lng });
         });
 
-        mapRef.current = map;
+        mapInstanceRef.current = mapInstance;
+        markerInstanceRef.current = markerInstance;
         setMapReady(true);
       } catch (error) {
-        if (!mounted) return;
+        if (!isMounted) return;
         setMapReady(false);
         setMapError(error.message || "Unable to load map");
       }
     };
 
-    initMap();
+    initializeMap();
 
     return () => {
-      mounted = false;
+      isMounted = false;
       if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current);
-      if (mapRef.current) {
-        mapRef.current.remove();
-        mapRef.current = null;
+
+      if (mapInstanceRef.current) {
+        mapInstanceRef.current.remove();
+        mapInstanceRef.current = null;
       }
-      markerRef.current = null;
+
+      markerInstanceRef.current = null;
     };
-  }, [onChange, value]);
+  }, [mapStyleUrl]);
 
   useEffect(() => {
-    if (!mapRef.current || !value) return;
+    const mapInstance = mapInstanceRef.current;
+    const markerInstance = markerInstanceRef.current;
 
-    if (markerRef.current) {
-      markerRef.current.setLatLng([value.lat, value.lng]);
-    }
+    if (!mapInstance || !markerInstance || !value) return;
 
-    mapRef.current.setView([value.lat, value.lng], 15);
+    const nextLatitude = Number(value.lat);
+    const nextLongitude = Number(value.lng);
+    if (!Number.isFinite(nextLatitude) || !Number.isFinite(nextLongitude)) return;
+
+    markerInstance.setLngLat([nextLongitude, nextLatitude]);
+    mapInstance.easeTo({
+      center: [nextLongitude, nextLatitude],
+      zoom: 15,
+      duration: 700,
+    });
   }, [value]);
 
   useEffect(() => {
@@ -261,16 +332,21 @@ const DeliveryLocationPicker = ({ value, onChange, onAddressResolved }) => {
     const resolveAddress = async () => {
       try {
         setResolvingAddress(true);
-        const address = await reversePhoton(value.lat, value.lng);
-        if (!cancelled && address) {
+        const resolvedAddress = mapTilerApiKey
+          ? await reverseMapTiler(value.lat, value.lng, mapTilerApiKey)
+          : await reversePhoton(value.lat, value.lng);
+
+        if (!cancelled && resolvedAddress) {
           suppressSearchRef.current = true;
-          setSearchQuery(address);
-          onAddressResolvedRef.current(address);
+          setSearchQuery(resolvedAddress);
+          onAddressResolvedRef.current(resolvedAddress);
         }
       } catch {
-        // Reverse lookup is optional.
+        setMapError("");
       } finally {
-        if (!cancelled) setResolvingAddress(false);
+        if (!cancelled) {
+          setResolvingAddress(false);
+        }
       }
     };
 
@@ -279,12 +355,14 @@ const DeliveryLocationPicker = ({ value, onChange, onAddressResolved }) => {
     return () => {
       cancelled = true;
     };
-  }, [value]);
+  }, [mapTilerApiKey, value]);
 
   const triggerSearch = async (queryText, requestId) => {
     try {
       setSearchingLocations(true);
-      const results = await searchPhoton(queryText);
+      const results = mapTilerApiKey
+        ? await searchMapTiler(queryText, mapTilerApiKey)
+        : await searchPhoton(queryText);
       if (requestId !== searchRequestIdRef.current) return;
       setLocationResults(results);
       setShowResults(true);
@@ -300,8 +378,8 @@ const DeliveryLocationPicker = ({ value, onChange, onAddressResolved }) => {
   };
 
   const handleSearchInputChange = (event) => {
-    const nextValue = event.target.value;
-    setSearchQuery(nextValue);
+    const nextSearchValue = event.target.value;
+    setSearchQuery(nextSearchValue);
 
     if (suppressSearchRef.current) {
       suppressSearchRef.current = false;
@@ -310,8 +388,8 @@ const DeliveryLocationPicker = ({ value, onChange, onAddressResolved }) => {
 
     if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current);
 
-    const trimmedQuery = nextValue.trim();
-    if (trimmedQuery.length < 3) {
+    const trimmedSearchValue = nextSearchValue.trim();
+    if (trimmedSearchValue.length < 3) {
       searchRequestIdRef.current += 1;
       setLocationResults([]);
       setShowResults(false);
@@ -319,11 +397,12 @@ const DeliveryLocationPicker = ({ value, onChange, onAddressResolved }) => {
       return;
     }
 
-    const requestId = searchRequestIdRef.current + 1;
-    searchRequestIdRef.current = requestId;
+    const nextRequestId = searchRequestIdRef.current + 1;
+    searchRequestIdRef.current = nextRequestId;
+
     searchTimeoutRef.current = setTimeout(() => {
-      triggerSearch(trimmedQuery, requestId);
-    }, 300);
+      triggerSearch(trimmedSearchValue, nextRequestId);
+    }, 250);
   };
 
   const useCurrentLocation = () => {
@@ -334,7 +413,7 @@ const DeliveryLocationPicker = ({ value, onChange, onAddressResolved }) => {
       (position) => {
         const lat = Number(position.coords.latitude.toFixed(6));
         const lng = Number(position.coords.longitude.toFixed(6));
-        onChange({ lat, lng });
+        onChangeRef.current({ lat, lng });
         setLocating(false);
       },
       () => {
@@ -344,13 +423,14 @@ const DeliveryLocationPicker = ({ value, onChange, onAddressResolved }) => {
     );
   };
 
-  const handleSelectLocation = (location) => {
-    onChange({ lat: location.lat, lng: location.lng });
+  const handleSelectLocation = (selectedLocation) => {
+    onChangeRef.current({ lat: selectedLocation.lat, lng: selectedLocation.lng });
     suppressSearchRef.current = true;
-    setSearchQuery(location.label);
+    setSearchQuery(selectedLocation.label);
     setShowResults(false);
+
     if (onAddressResolvedRef.current) {
-      onAddressResolvedRef.current(location.label);
+      onAddressResolvedRef.current(selectedLocation.label);
     }
   };
 
@@ -418,7 +498,7 @@ const DeliveryLocationPicker = ({ value, onChange, onAddressResolved }) => {
         {resolvingAddress && <p>Resolving address...</p>}
         {mapError && <p className="text-red-600">{mapError}</p>}
         {!mapError && !mapReady && <p>Loading map...</p>}
-        <p className="text-gray-500">Powered by OpenStreetMap and Photon (free tier, fair use).</p>
+        <p className="text-gray-500">Powered by MapLibre and MapTiler (fallback: Photon).</p>
       </div>
     </div>
   );

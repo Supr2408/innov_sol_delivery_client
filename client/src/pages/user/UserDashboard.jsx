@@ -1,26 +1,47 @@
-import React, { useContext, useEffect, useMemo, useRef, useState } from "react";
-import { AppContext } from "../../context/AppContext";
+﻿import { useContext, useEffect, useMemo, useState } from "react";
 import axios from "axios";
 import { toast } from "react-toastify";
+import {
+  ArrowUpDown,
+  ChevronRight,
+  Clock3,
+  Copy,
+  MapPinned,
+  Minus,
+  Package,
+  Phone,
+  Plus,
+  Search,
+  ShoppingCart,
+  SlidersHorizontal,
+  Star,
+  Store,
+  Trash2,
+  Truck,
+  UserRound,
+  X,
+} from "lucide-react";
 import DeliveryLocationPicker from "../../components/DeliveryLocationPicker";
 import LiveRouteMap from "../../components/LiveRouteMap";
+import UserBottomNav from "../../components/UserBottomNav";
+import { AppContext } from "../../context/appContext";
 
-const ORDER_STATUS_FLOW = [
-  "pending",
-  "confirmed",
-  "shipped",
-  "in_transit",
-  "delivered",
-];
+const DEFAULT_CATEGORIES = ["All", "Bakery", "Pharmacy", "Cafe"];
 
 const ORDER_STATUS_LABELS = {
-  pending: "Order Received",
+  pending: "Ordered",
   confirmed: "Preparing",
-  shipped: "Partner Assigned",
-  in_transit: "Out for Delivery",
+  shipped: "Shipped",
+  in_transit: "In Transit",
   delivered: "Delivered",
   cancelled: "Cancelled",
 };
+
+const TRACKING_STEPS = [
+  { id: "ordered", label: "Ordered" },
+  { id: "shipped", label: "Shipped" },
+  { id: "in_transit", label: "In Transit" },
+];
 
 const loadSocketClient = () =>
   new Promise((resolve, reject) => {
@@ -43,47 +64,153 @@ const loadSocketClient = () =>
     script.async = true;
     script.dataset.socketIoClient = "true";
     script.addEventListener("load", () => resolve(window.io));
-    script.addEventListener("error", () =>
-      reject(new Error("Socket client failed to load")),
-    );
+    script.addEventListener("error", () => reject(new Error("Socket client failed to load")));
     document.body.appendChild(script);
   });
 
+const resolveSocketServerUrl = () => {
+  const configuredBackendUrl = import.meta.env.VITE_BACKEND_URL;
+  if (!configuredBackendUrl) return "http://localhost:5000";
+
+  try {
+    const parsedBackendUrl = new URL(configuredBackendUrl);
+    return `${parsedBackendUrl.protocol}//${parsedBackendUrl.host}`;
+  } catch {
+    return configuredBackendUrl.replace(/\/api\/?$/, "");
+  }
+};
+
+const getTrackingStepIndex = (status) => {
+  if (status === "in_transit") return 2;
+  if (status === "shipped") return 1;
+  return 0;
+};
+
+const toLocation = (location) => {
+  const lat = Number(location?.lat);
+  const lng = Number(location?.lng);
+
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+    return null;
+  }
+
+  return { lat, lng };
+};
+
+const hashString = (value = "") =>
+  Array.from(String(value)).reduce((acc, char) => {
+    const next = (acc << 5) - acc + char.charCodeAt(0);
+    return next | 0;
+  }, 0);
+
+const getStorePresentation = (store) => {
+  const hashSeed = Math.abs(hashString(`${store?._id || "store"}-${store?.storeName || "unknown"}`));
+  const rating = Number((3.8 + (hashSeed % 13) * 0.1).toFixed(1));
+  const distanceKm = Number((0.7 + ((hashSeed >> 2) % 90) * 0.1).toFixed(1));
+  const imageSeed = encodeURIComponent(String(store?._id || store?.storeName || "store"));
+
+  return {
+    rating,
+    distanceKm,
+    imageUrl: `https://picsum.photos/seed/${imageSeed}/900/600`,
+  };
+};
+
+const resolveStoreIdFromItem = (item) => {
+  if (!item?.storeId) return "";
+
+  if (typeof item.storeId === "string") {
+    return item.storeId;
+  }
+
+  return item.storeId?._id ? String(item.storeId._id) : "";
+};
+
+const resolveStoreNameFromItem = (item) => {
+  if (!item?.storeId) return "Store";
+
+  if (typeof item.storeId === "object") {
+    return item.storeId?.storeName || "Store";
+  }
+
+  return "Store";
+};
+
+const upsertByOrderId = (orders, order) => {
+  const existingOrder = orders.find((currentOrder) => currentOrder._id === order._id);
+  const mergedOrder = existingOrder ? { ...existingOrder, ...order } : order;
+
+  if (!order?.deliveryOTP && existingOrder?.deliveryOTP) {
+    mergedOrder.deliveryOTP = existingOrder.deliveryOTP;
+  }
+
+  const next = orders.filter((existingOrder) => existingOrder._id !== order._id);
+  return [mergedOrder, ...next];
+};
+
+const mergePartnerLocation = (orders, orderId, partnerCurrentLocation) =>
+  orders.map((existingOrder) =>
+    existingOrder._id === orderId
+      ? {
+          ...existingOrder,
+          partnerCurrentLocation,
+        }
+      : existingOrder,
+  );
+
+const StoreCardSkeleton = () => (
+  <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+    <div className="h-44 animate-pulse bg-slate-200" />
+    <div className="space-y-3 p-4">
+      <div className="h-4 w-2/3 animate-pulse rounded bg-slate-200" />
+      <div className="h-3 w-1/3 animate-pulse rounded bg-slate-200" />
+      <div className="h-8 w-full animate-pulse rounded-xl bg-slate-200" />
+    </div>
+  </div>
+);
+
 const UserDashboard = () => {
   const { user, token } = useContext(AppContext);
-  const [activeTab, setActiveTab] = useState("shop");
-  const [items, setItems] = useState([]);
-  const [filteredItems, setFilteredItems] = useState([]);
-  const [stores, setStores] = useState([]);
-  const [selectedStore, setSelectedStore] = useState("all");
-  const [searchQuery, setSearchQuery] = useState("");
-  const [categories, setCategories] = useState([]);
-  const [selectedCategory, setSelectedCategory] = useState("All");
-  const [specifications, setSpecifications] = useState([]);
-  const [selectedSpecification, setSelectedSpecification] = useState("All");
-  const [cart, setCart] = useState([]);
+
+  const [activeTab, setActiveTab] = useState("home");
   const [orders, setOrders] = useState([]);
   const [tracking, setTracking] = useState([]);
-  const [loading, setLoading] = useState(false);
+  const [stores, setStores] = useState([]);
+  const [categories, setCategories] = useState(DEFAULT_CATEGORIES);
+
+  const [storesLoading, setStoresLoading] = useState(true);
+  const [ordersLoading, setOrdersLoading] = useState(true);
+  const [discoveryLoading, setDiscoveryLoading] = useState(false);
+
+  const [searchQuery, setSearchQuery] = useState("");
+  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState("");
+  const [selectedCategory, setSelectedCategory] = useState("All");
+  const [searchItems, setSearchItems] = useState([]);
+
+  const [sortBy, setSortBy] = useState("fastest");
+  const [showFilterModal, setShowFilterModal] = useState(false);
+  const [matchingStoreIds, setMatchingStoreIds] = useState(null);
+  const [selectedStoreId, setSelectedStoreId] = useState("");
+  const [selectedStoreItems, setSelectedStoreItems] = useState([]);
+  const [selectedStoreItemsLoading, setSelectedStoreItemsLoading] = useState(false);
+  const [cart, setCart] = useState([]);
   const [cartOpen, setCartOpen] = useState(false);
-  const [selectedItemDetails, setSelectedItemDetails] = useState(null);
-  const [viewMode, setViewMode] = useState(2); // 1, 2, or "list"
-  const [showProductModal, setShowProductModal] = useState(false);
+  const [placingOrder, setPlacingOrder] = useState(false);
   const [checkoutForm, setCheckoutForm] = useState({
     deliveryAddress: "",
     clientPhone: "",
   });
   const [deliveryLocation, setDeliveryLocation] = useState(() => {
-    const saved = localStorage.getItem("userDeliveryLocation");
-    if (!saved) return null;
+    const savedLocation = localStorage.getItem("userDeliveryLocation");
+    if (!savedLocation) return null;
 
     try {
-      const parsed = JSON.parse(saved);
-      if (Number.isFinite(parsed?.lat) && Number.isFinite(parsed?.lng)) {
-        return {
-          lat: Number(parsed.lat),
-          lng: Number(parsed.lng),
-        };
+      const parsedLocation = JSON.parse(savedLocation);
+      const lat = Number(parsedLocation?.lat);
+      const lng = Number(parsedLocation?.lng);
+
+      if (Number.isFinite(lat) && Number.isFinite(lng)) {
+        return { lat, lng };
       }
     } catch {
       return null;
@@ -91,18 +218,29 @@ const UserDashboard = () => {
 
     return null;
   });
-  const [placingOrder, setPlacingOrder] = useState(false);
-  const socketRef = useRef(null);
 
-  // Load cart from localStorage on mount
+  useEffect(() => {
+    const debounceTimeoutId = setTimeout(() => {
+      setDebouncedSearchQuery(searchQuery.trim());
+    }, 250);
+
+    return () => clearTimeout(debounceTimeoutId);
+  }, [searchQuery]);
+
   useEffect(() => {
     const savedCart = localStorage.getItem("userCart");
-    if (savedCart) {
-      setCart(JSON.parse(savedCart));
+    if (!savedCart) return;
+
+    try {
+      const parsedCart = JSON.parse(savedCart);
+      if (Array.isArray(parsedCart)) {
+        setCart(parsedCart);
+      }
+    } catch {
+      setCart([]);
     }
   }, []);
 
-  // Save cart to localStorage whenever it changes
   useEffect(() => {
     localStorage.setItem("userCart", JSON.stringify(cart));
   }, [cart]);
@@ -116,258 +254,124 @@ const UserDashboard = () => {
     localStorage.removeItem("userDeliveryLocation");
   }, [deliveryLocation]);
 
-  // Fetch stores and categories
   useEffect(() => {
-    const fetchStores = async () => {
+    setCheckoutForm((previousForm) => ({
+      ...previousForm,
+      clientPhone: previousForm.clientPhone || user?.phone || "",
+    }));
+  }, [user?.phone]);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    const fetchStoresAndCategories = async () => {
+      setStoresLoading(true);
+
       try {
-        setLoading(true);
-        const { data } = await axios.get("/stores/all");
-        setStores(data.stores || []);
-      } catch {
-        toast.error("Failed to fetch stores");
+        const [storesResult, categoriesResult] = await Promise.allSettled([
+          axios.get("/stores/all"),
+          axios.get("/items/categories/all"),
+        ]);
+
+        if (!isMounted) return;
+
+        if (storesResult.status === "fulfilled") {
+          setStores(storesResult.value.data?.stores || []);
+        } else {
+          setStores([]);
+          toast.error("Unable to load stores right now");
+        }
+
+        if (categoriesResult.status === "fulfilled") {
+          const apiCategories = Array.isArray(categoriesResult.value.data?.categories)
+            ? categoriesResult.value.data.categories
+            : [];
+
+          const mergedCategories = [
+            ...DEFAULT_CATEGORIES,
+            ...apiCategories.filter((category) => !DEFAULT_CATEGORIES.includes(category)),
+          ];
+
+          setCategories(mergedCategories);
+        } else {
+          setCategories(DEFAULT_CATEGORIES);
+        }
       } finally {
-        setLoading(false);
-      }
-    };
-
-    const fetchCategories = async () => {
-      try {
-        const { data } = await axios.get("/items/categories/all");
-        if (data.categories && Array.isArray(data.categories)) {
-          setCategories(["All", ...data.categories]);
-        } else {
-          setCategories(["All"]);
+        if (isMounted) {
+          setStoresLoading(false);
         }
-      } catch (error) {
-        console.log("Failed to fetch categories:", error);
-        setCategories(["All"]);
       }
     };
 
-    const fetchSpecifications = async () => {
-      try {
-        const { data } = await axios.get("/items/specifications/all");
-        if (data.specifications && Array.isArray(data.specifications)) {
-          setSpecifications(["All", ...data.specifications]);
-        } else {
-          setSpecifications(["All"]);
-        }
-      } catch (error) {
-        console.log("Failed to fetch specifications:", error);
-        setSpecifications(["All"]);
-      }
-    };
+    fetchStoresAndCategories();
 
-    fetchStores();
-    fetchCategories();
-    fetchSpecifications();
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
-  // Fetch items from selected store
   useEffect(() => {
-    if (selectedStore && selectedStore !== "all") {
-      fetchItems();
-    }
-  }, [selectedStore]);
-
-  // Global search and filter logic
-  useEffect(() => {
-    if (selectedStore === "all") {
-      // Global search across all stores
-      if (selectedCategory !== "All" || selectedSpecification !== "All") {
-        // Category or specification selected - browse globally then filter client-side.
-        performCategoryBrowse();
-      } else if (searchQuery.trim()) {
-        // Search query entered - search globally
-        performGlobalSearch();
-      } else {
-        // Default browsing for all stores without strict filters.
-        performCategoryBrowse();
-      }
-    } else {
-      // Search within selected store
-      if (searchQuery.trim() === "") {
-        filterByCategory(items);
-      } else {
-        const query = searchQuery.toLowerCase();
-        const filtered = items.filter(
-          (item) =>
-            item.itemName.toLowerCase().includes(query) ||
-            item.category.toLowerCase().includes(query) ||
-            item.description.toLowerCase().includes(query) ||
-            (item.specifications &&
-              item.specifications.some((spec) =>
-                spec.toLowerCase().includes(query)
-              ))
-        );
-        filterByCategory(filtered);
-      }
-    }
-  }, [searchQuery, items, selectedStore, selectedCategory, selectedSpecification]);
-
-  // Filter items by category and specifications
-  // Deduplicate items by SKU and filter out items with no stock
-  const deduplicateItems = (itemsToFilter) => {
-    const seen = new Set();
-    return itemsToFilter.filter((item) => {
-      const sku = item.sku || item._id; // Use SKU or fallback to _id
-      // Only include items that are in stock and haven't been seen yet
-      if (item.stock > 0 && !seen.has(sku)) {
-        seen.add(sku);
-        return true;
-      }
-      return false;
-    });
-  };
-
-  const filterByCategory = (itemsToFilter) => {
-    // First deduplicate items
-    let deduped = deduplicateItems(itemsToFilter);
-    let filtered = deduped;
-    
-    // Filter by category
-    if (selectedCategory !== "All") {
-      filtered = filtered.filter(
-        (item) => item.category === selectedCategory
-      );
-    }
-    
-    // Filter by specification (partial match, case-insensitive)
-    if (selectedSpecification !== "All" && selectedSpecification.trim() !== "") {
-      const specQuery = selectedSpecification.toLowerCase();
-      filtered = filtered.filter(
-        (item) =>
-          item.specifications &&
-          item.specifications.some((spec) =>
-            spec.toLowerCase().includes(specQuery)
-          )
-      );
-    }
-    
-    setFilteredItems(filtered);
-  };
-
-  // Perform global search
-  const performGlobalSearch = async () => {
-    if (!searchQuery.trim()) {
-      setFilteredItems([]);
+    if (!user?.id) {
+      setOrders([]);
+      setTracking([]);
+      setOrdersLoading(false);
       return;
     }
 
-    try {
-      setLoading(true);
-      const query = new URLSearchParams({
-        query: searchQuery,
-        category: selectedCategory === "All" ? "" : selectedCategory,
-      });
-      const { data } = await axios.get(`/items/search/global?${query}`);
-      // Apply deduplication and stock filtering to search results
-      const deduped = deduplicateItems(data.items || []);
-      filterByCategory(deduped);
-    } catch {
-      toast.error("Global search failed");
-      setFilteredItems([]);
-    } finally {
-      setLoading(false);
-    }
-  };
+    let isMounted = true;
 
-  // Browse all items by category (no search term required)
-  const performCategoryBrowse = async () => {
-    try {
-      setLoading(true);
-      const query = new URLSearchParams({
-        query: "", // Empty search query
-        category: selectedCategory,
-      });
-      const { data } = await axios.get(`/items/search/global?${query}`);
-      // Apply deduplication and stock filtering to category results
-      const deduped = deduplicateItems(data.items || []);
-      filterByCategory(deduped);
-    } catch (error) {
-      console.log("Category browse failed:", error);
-      setFilteredItems([]);
-    } finally {
-      setLoading(false);
-    }
-  };
+    const fetchOrders = async () => {
+      setOrdersLoading(true);
 
-  // Fetch items from store
-  const fetchItems = async () => {
-    try {
-      setLoading(true);
-      const { data } = await axios.get(`/items/${selectedStore}`);
-      setItems(data.items || []);
-      filterByCategory(data.items || []);
-    } catch {
-      toast.error("Failed to fetch items");
-    } finally {
-      setLoading(false);
-    }
-  };
+      try {
+        const [ordersResult, trackingResult] = await Promise.allSettled([
+          axios.get(`/orders/user/${user.id}`),
+          axios.get(`/orders/tracking/${user.id}`),
+        ]);
 
-  // Fetch user's orders
-  const fetchOrders = async () => {
-    try {
-      setLoading(true);
-      const { data } = await axios.get(`/orders/user/${user.id}`);
-      setOrders(data.orders || []);
-    } catch {
-      toast.error("Failed to fetch orders");
-    } finally {
-      setLoading(false);
-    }
-  };
+        if (!isMounted) return;
 
-  // Fetch tracking info
-  const fetchTracking = async () => {
-    try {
-      setLoading(true);
-      const { data } = await axios.get(`/orders/tracking/${user.id}`);
-      setTracking(data.tracking || []);
-    } catch {
-      // Tracking might not have orders yet, so don't show error
-      setTracking([]);
-    } finally {
-      setLoading(false);
-    }
-  };
+        if (ordersResult.status === "fulfilled") {
+          setOrders(ordersResult.value.data?.orders || []);
+        } else {
+          setOrders([]);
+          toast.error("Unable to load your orders right now");
+        }
 
-  useEffect(() => {
-    if (user?.id) {
-      fetchOrders();
-      fetchTracking();
-    }
+        if (trackingResult.status === "fulfilled") {
+          setTracking(trackingResult.value.data?.tracking || []);
+        } else {
+          setTracking([]);
+        }
+      } finally {
+        if (isMounted) {
+          setOrdersLoading(false);
+        }
+      }
+    };
+
+    fetchOrders();
+
+    return () => {
+      isMounted = false;
+    };
   }, [user?.id]);
 
   useEffect(() => {
     if (!token || !user?.id) return;
 
     let socket;
-
-    const upsertOrder = (prev, nextOrder) => {
-      const withoutCurrent = prev.filter((existing) => existing._id !== nextOrder._id);
-      return [nextOrder, ...withoutCurrent];
-    };
-    const mergePartnerLocation = (prev, orderId, partnerCurrentLocation) =>
-      prev.map((existing) =>
-        existing._id === orderId
-          ? {
-              ...existing,
-              partnerCurrentLocation,
-            }
-          : existing,
-      );
+    let closed = false;
 
     const connectSocket = async () => {
       try {
         const ioClient = await loadSocketClient();
-        socket = ioClient(import.meta.env.VITE_BACKEND_URL || "http://localhost:5000", {
+        if (closed || typeof ioClient !== "function") return;
+
+        socket = ioClient(resolveSocketServerUrl(), {
           transports: ["websocket"],
           auth: { token },
         });
-
-        socketRef.current = socket;
 
         socket.on("connect", () => {
           socket.emit("join:user", user.id);
@@ -376,97 +380,315 @@ const UserDashboard = () => {
         socket.on("order:user:tracking", ({ order }) => {
           if (!order?._id) return;
 
-          setOrders((prev) => upsertOrder(prev, order));
+          setOrders((previousOrders) => upsertByOrderId(previousOrders, order));
+
           if (order.status === "delivered" || order.status === "cancelled") {
-            setTracking((prev) => prev.filter((existing) => existing._id !== order._id));
-          } else {
-            setTracking((prev) => upsertOrder(prev, order));
+            setTracking((previousTracking) =>
+              previousTracking.filter((existingOrder) => existingOrder._id !== order._id),
+            );
+            return;
           }
+
+          setTracking((previousTracking) => upsertByOrderId(previousTracking, order));
         });
 
         socket.on("order:user:partner-location", ({ orderId, partnerCurrentLocation }) => {
           if (!orderId || !partnerCurrentLocation) return;
 
-          setOrders((prev) => mergePartnerLocation(prev, orderId, partnerCurrentLocation));
-          setTracking((prev) => mergePartnerLocation(prev, orderId, partnerCurrentLocation));
+          setOrders((previousOrders) =>
+            mergePartnerLocation(previousOrders, orderId, partnerCurrentLocation),
+          );
+          setTracking((previousTracking) =>
+            mergePartnerLocation(previousTracking, orderId, partnerCurrentLocation),
+          );
+        });
+
+        socket.on("order:user:delivery-otp", ({ orderId, deliveryOTP }) => {
+          if (!orderId || !deliveryOTP) return;
+
+          const applyOtpToOrder = (order) =>
+            String(order?._id) === String(orderId)
+              ? {
+                  ...order,
+                  deliveryOTP: String(deliveryOTP),
+                }
+              : order;
+
+          setOrders((previousOrders) => previousOrders.map(applyOtpToOrder));
+          setTracking((previousTracking) => previousTracking.map(applyOtpToOrder));
         });
       } catch {
-        // Real-time channel is optional for dashboard availability.
+        // Realtime updates are optional; dashboard still works with polling state.
       }
     };
 
     connectSocket();
 
     return () => {
-      if (socket) socket.disconnect();
+      closed = true;
+      if (socket) {
+        socket.disconnect();
+      }
     };
   }, [token, user?.id]);
 
-  // Add item to cart
-  const addToCart = (item) => {
-    const existingItem = cart.find((c) => c._id === item._id);
-    if (existingItem) {
-      setCart(
-        cart.map((c) =>
-          c._id === item._id ? { ...c, quantity: c.quantity + 1 } : c
-        )
-      );
-    } else {
-      setCart([...cart, { ...item, quantity: 1 }]);
-    }
-    toast.success(`${item.itemName} added to cart!`);
-  };
+  const shouldFetchDiscoveryMatches =
+    selectedCategory !== "All" || debouncedSearchQuery.length > 0;
 
-  // Update cart quantity
-  const updateCartQuantity = (itemId, quantity) => {
-    if (quantity <= 0) {
-      removeFromCart(itemId);
-    } else {
-      setCart(
-        cart.map((item) =>
-          item._id === itemId ? { ...item, quantity } : item
-        )
-      );
-    }
-  };
+  useEffect(() => {
+    let isMounted = true;
 
-  // Remove from cart
-  const removeFromCart = (itemId) => {
-    setCart(cart.filter((item) => item._id !== itemId));
-    toast.info("Item removed from cart");
-  };
-
-  const getStoreIdFromItem = (item) => {
-    if (!item?.storeId) {
-      return selectedStore !== "all" ? selectedStore : null;
-    }
-
-    if (typeof item.storeId === "string") return item.storeId;
-    return item.storeId?._id || null;
-  };
-
-  const cartBreakdown = useMemo(() => {
-    const storeMap = new Map();
-
-    cart.forEach((item) => {
-      const storeId = getStoreIdFromItem(item) || "unknown";
-      const knownStore = stores.find((store) => store._id === storeId);
-      const existing = storeMap.get(storeId) || {
-        storeId,
-        storeName: item.storeId?.storeName || knownStore?.storeName || "Store",
-        lineItems: 0,
-        total: 0,
+    if (!shouldFetchDiscoveryMatches) {
+      setMatchingStoreIds(null);
+      setSearchItems([]);
+      setDiscoveryLoading(false);
+      return () => {
+        isMounted = false;
       };
+    }
 
-      existing.lineItems += item.quantity;
-      existing.total += Number(item.price) * item.quantity;
-      storeMap.set(storeId, existing);
+    const fetchStoreMatches = async () => {
+      setDiscoveryLoading(true);
+
+      try {
+        const query = new URLSearchParams({
+          query: debouncedSearchQuery,
+          category: selectedCategory,
+        });
+
+        const { data } = await axios.get(`/items/search/global?${query}`);
+        if (!isMounted) return;
+
+        const matchedItems = data?.items || [];
+        const ids = new Set(
+          matchedItems
+            .map((item) =>
+              typeof item?.storeId === "string" ? item.storeId : item?.storeId?._id,
+            )
+            .filter(Boolean)
+            .map((id) => String(id)),
+        );
+
+        setSearchItems(matchedItems);
+        setMatchingStoreIds(ids);
+      } catch {
+        if (isMounted) {
+          setSearchItems([]);
+          setMatchingStoreIds(new Set());
+        }
+      } finally {
+        if (isMounted) {
+          setDiscoveryLoading(false);
+        }
+      }
+    };
+
+    fetchStoreMatches();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [debouncedSearchQuery, selectedCategory, shouldFetchDiscoveryMatches]);
+
+  const storesWithPresentation = useMemo(
+    () => stores.map((store) => ({ ...store, ...getStorePresentation(store) })),
+    [stores],
+  );
+  const storeNameById = useMemo(
+    () => new Map(stores.map((store) => [String(store._id), store.storeName || "Store"])),
+    [stores],
+  );
+
+  const visibleStores = useMemo(() => {
+    const normalizedSearch = debouncedSearchQuery.toLowerCase();
+
+    const filtered = storesWithPresentation.filter((store) => {
+      const textMatch =
+        !normalizedSearch ||
+        [store.storeName, store.city, store.address]
+          .filter(Boolean)
+          .some((value) => value.toLowerCase().includes(normalizedSearch));
+
+      if (!shouldFetchDiscoveryMatches) {
+        return textMatch;
+      }
+
+      const itemMatch =
+        matchingStoreIds instanceof Set && matchingStoreIds.has(String(store._id));
+
+      if (selectedCategory !== "All") {
+        return itemMatch;
+      }
+
+      return textMatch || itemMatch;
     });
 
-    return Array.from(storeMap.values());
-  }, [cart, selectedStore, stores]);
+    filtered.sort((storeA, storeB) => {
+      if (sortBy === "top_rated") {
+        if (storeB.rating !== storeA.rating) {
+          return storeB.rating - storeA.rating;
+        }
+        return storeA.distanceKm - storeB.distanceKm;
+      }
+
+      if (storeA.distanceKm !== storeB.distanceKm) {
+        return storeA.distanceKm - storeB.distanceKm;
+      }
+      return storeB.rating - storeA.rating;
+    });
+
+    return filtered;
+  }, [
+    debouncedSearchQuery,
+    matchingStoreIds,
+    selectedCategory,
+    shouldFetchDiscoveryMatches,
+    sortBy,
+    storesWithPresentation,
+  ]);
+
+  const visibleSearchItems = useMemo(() => {
+    const normalizedSearch = debouncedSearchQuery.toLowerCase();
+
+    return searchItems
+      .filter((item) => {
+        const stock = Number(item?.stock || 0);
+        if (stock <= 0) return false;
+
+        const categoryMatch =
+          selectedCategory === "All" ||
+          String(item?.category || "").toLowerCase() === selectedCategory.toLowerCase();
+
+        const textMatch =
+          !normalizedSearch ||
+          [item?.itemName, item?.description, item?.category]
+            .filter(Boolean)
+            .some((value) => value.toLowerCase().includes(normalizedSearch));
+
+        return categoryMatch && textMatch;
+      })
+      .slice(0, 24);
+  }, [debouncedSearchQuery, searchItems, selectedCategory]);
+
+  const selectedStore = useMemo(
+    () => storesWithPresentation.find((store) => String(store._id) === String(selectedStoreId)) || null,
+    [selectedStoreId, storesWithPresentation],
+  );
+
+  const visibleSelectedStoreItems = useMemo(() => {
+    const normalizedSearch = debouncedSearchQuery.toLowerCase();
+
+    return selectedStoreItems
+      .filter((item) => {
+        const stock = Number(item?.stock || 0);
+        if (stock <= 0) return false;
+
+        const categoryMatch =
+          selectedCategory === "All" ||
+          String(item?.category || "").toLowerCase() === selectedCategory.toLowerCase();
+
+        const textMatch =
+          !normalizedSearch ||
+          [item?.itemName, item?.description, item?.category]
+            .filter(Boolean)
+            .some((value) => value.toLowerCase().includes(normalizedSearch));
+
+        return categoryMatch && textMatch;
+      })
+      .slice(0, 24);
+  }, [debouncedSearchQuery, selectedCategory, selectedStoreItems]);
+
+  const cartQuantityByItemId = useMemo(
+    () =>
+      cart.reduce((accumulator, cartItem) => {
+        accumulator[String(cartItem._id)] = Number(cartItem.quantity || 0);
+        return accumulator;
+      }, {}),
+    [cart],
+  );
+
+  const cartItemsCount = useMemo(
+    () => cart.reduce((sum, item) => sum + Number(item.quantity || 0), 0),
+    [cart],
+  );
+
+  const cartTotalAmount = useMemo(
+    () => cart.reduce((sum, item) => sum + Number(item.price || 0) * Number(item.quantity || 0), 0),
+    [cart],
+  );
+
+  const addItemToCart = (item, fallbackStoreId = "", fallbackStoreName = "Store") => {
+    const normalizedStoreId = resolveStoreIdFromItem(item) || String(fallbackStoreId || "");
+    if (!normalizedStoreId) {
+      toast.error("Unable to identify item store");
+      return;
+    }
+
+    const normalizedItemId = String(item?._id || "");
+    if (!normalizedItemId) {
+      toast.error("Unable to add this item");
+      return;
+    }
+
+    const storeName = resolveStoreNameFromItem(item) || fallbackStoreName || "Store";
+    const normalizedCartItem = {
+      _id: normalizedItemId,
+      itemName: item.itemName || "Item",
+      price: Number(item.price || 0),
+      quantity: 1,
+      storeId: normalizedStoreId,
+      storeName,
+      image: item.image || "",
+      category: item.category || "",
+    };
+
+    setCart((previousCart) => {
+      const existingItem = previousCart.find((cartItem) => String(cartItem._id) === normalizedItemId);
+      if (!existingItem) {
+        return [...previousCart, normalizedCartItem];
+      }
+
+      return previousCart.map((cartItem) =>
+        String(cartItem._id) === normalizedItemId
+          ? { ...cartItem, quantity: Number(cartItem.quantity || 0) + 1 }
+          : cartItem,
+      );
+    });
+    toast.success(`${item.itemName || "Item"} added to cart`);
+  };
+
+  const updateCartQuantity = (itemId, quantity) => {
+    const normalizedItemId = String(itemId || "");
+
+    if (quantity <= 0) {
+      setCart((previousCart) =>
+        previousCart.filter((cartItem) => String(cartItem._id) !== normalizedItemId),
+      );
+      return;
+    }
+
+    setCart((previousCart) =>
+      previousCart.map((cartItem) =>
+        String(cartItem._id) === normalizedItemId
+          ? { ...cartItem, quantity: Number(quantity) }
+          : cartItem,
+      ),
+    );
+  };
+
+  const removeFromCart = (itemId) => {
+    const normalizedItemId = String(itemId || "");
+    setCart((previousCart) =>
+      previousCart.filter((cartItem) => String(cartItem._id) !== normalizedItemId),
+    );
+  };
 
   const placeOrder = async () => {
+    if (!user?.id) {
+      toast.error("Please log in to place an order");
+      return;
+    }
+
     if (!cart.length) {
       toast.error("Your cart is empty");
       return;
@@ -482,28 +704,34 @@ const UserDashboard = () => {
       return;
     }
 
-    const groupedItems = new Map();
-    for (const item of cart) {
-      const storeId = getStoreIdFromItem(item);
-      if (!storeId) {
-        toast.error("Unable to detect store for one or more items");
-        return;
-      }
+    const groupedItems = cart.reduce((accumulator, cartItem) => {
+      const storeId = String(cartItem.storeId || "");
+      if (!storeId) return accumulator;
 
-      if (!groupedItems.has(storeId)) groupedItems.set(storeId, []);
-      groupedItems.get(storeId).push(item);
+      if (!accumulator[storeId]) {
+        accumulator[storeId] = [];
+      }
+      accumulator[storeId].push(cartItem);
+      return accumulator;
+    }, {});
+
+    const storeIds = Object.keys(groupedItems);
+    if (!storeIds.length) {
+      toast.error("Unable to identify stores for checkout");
+      return;
     }
 
-    try {
-      setPlacingOrder(true);
+    setPlacingOrder(true);
 
-      const requests = Array.from(groupedItems.entries()).map(([storeId, storeItems]) => {
-        const payloadItems = storeItems.map((item) => ({
-          itemId: item._id,
-          itemName: item.itemName,
-          quantity: item.quantity,
-          price: Number(item.price),
-          subtotal: Number(item.price) * item.quantity,
+    try {
+      const requests = storeIds.map((storeId) => {
+        const itemsForStore = groupedItems[storeId];
+        const payloadItems = itemsForStore.map((cartItem) => ({
+          itemId: cartItem._id,
+          itemName: cartItem.itemName,
+          quantity: Number(cartItem.quantity || 0),
+          price: Number(cartItem.price || 0),
+          subtotal: Number(cartItem.price || 0) * Number(cartItem.quantity || 0),
         }));
 
         const totalAmount = payloadItems.reduce((sum, item) => sum + item.subtotal, 0);
@@ -516,1079 +744,924 @@ const UserDashboard = () => {
           deliveryAddress: checkoutForm.deliveryAddress.trim(),
           customerLocation: deliveryLocation
             ? {
-                lat: deliveryLocation.lat,
-                lng: deliveryLocation.lng,
+                lat: Number(deliveryLocation.lat),
+                lng: Number(deliveryLocation.lng),
                 label: checkoutForm.deliveryAddress.trim(),
               }
             : undefined,
-          clientName: user.name,
+          clientName: user?.name || "Customer",
           clientPhone: checkoutForm.clientPhone.trim(),
         });
       });
 
       await Promise.all(requests);
 
+      const [ordersResult, trackingResult] = await Promise.allSettled([
+        axios.get(`/orders/user/${user.id}`),
+        axios.get(`/orders/tracking/${user.id}`),
+      ]);
+
+      if (ordersResult.status === "fulfilled") {
+        setOrders(ordersResult.value.data?.orders || []);
+      }
+      if (trackingResult.status === "fulfilled") {
+        setTracking(trackingResult.value.data?.tracking || []);
+      }
+
       setCart([]);
       setCartOpen(false);
-      setActiveTab("tracking");
-      setCheckoutForm((prev) => ({ ...prev, deliveryAddress: "" }));
       setDeliveryLocation(null);
-
-      await Promise.all([fetchOrders(), fetchTracking()]);
-      toast.success(
-        requests.length > 1
-          ? `Placed ${requests.length} orders across multiple stores`
-          : "Order placed successfully",
-      );
+      setActiveTab("home");
+      toast.success("Order placed successfully");
     } catch (error) {
-      toast.error(error.response?.data?.message || "Unable to place order");
+      toast.error(error?.response?.data?.message || "Unable to place order");
     } finally {
       setPlacingOrder(false);
     }
   };
 
-  const reorderOrder = (order) => {
-    if (!order?.items?.length) {
-      toast.info("No items found for reorder");
-      return;
+  const handleViewStore = async (storeId) => {
+    if (!storeId) return;
+
+    setSelectedStoreId(String(storeId));
+    setSelectedStoreItemsLoading(true);
+
+    try {
+      const { data } = await axios.get(`/items/${storeId}`);
+      setSelectedStoreItems(data?.items || []);
+    } catch {
+      setSelectedStoreItems([]);
+      toast.error("Unable to load store products");
+    } finally {
+      setSelectedStoreItemsLoading(false);
     }
-
-    const storeId =
-      typeof order.storeId === "string" ? order.storeId : order.storeId?._id || selectedStore;
-
-    setCart((prev) => {
-      const next = [...prev];
-
-      order.items.forEach((item) => {
-        const id =
-          typeof item.itemId === "string" ? item.itemId : item.itemId?._id || item._id;
-        if (!id) return;
-
-        const existingIndex = next.findIndex((cartItem) => cartItem._id === id);
-        if (existingIndex > -1) {
-          next[existingIndex] = {
-            ...next[existingIndex],
-            quantity: next[existingIndex].quantity + Number(item.quantity || 1),
-          };
-          return;
-        }
-
-        next.push({
-          _id: id,
-          itemName: item.itemName,
-          price: Number(item.price || 0),
-          quantity: Number(item.quantity || 1),
-          image: "",
-          storeId,
-          stock: Number(item.quantity || 1),
-        });
-      });
-
-      return next;
-    });
-
-    setCartOpen(true);
-    setActiveTab("shop");
-    toast.success("Order items added to cart");
   };
 
-  const getOrderProgress = (status) => {
-    const normalizedStatus = status || "pending";
-    const index = ORDER_STATUS_FLOW.indexOf(normalizedStatus);
-    if (index < 0) return 0;
-    return Math.round(((index + 1) / ORDER_STATUS_FLOW.length) * 100);
-  };
+  const activeOrder = useMemo(() => {
+    const sourceOrders = tracking.length ? tracking : orders;
 
-  // Calculate cart totals
-  const cartTotal = cart.reduce(
-    (sum, item) => sum + item.price * item.quantity,
-    0
-  );
-  const cartItems = cart.reduce((sum, item) => sum + item.quantity, 0);
-  const orderCount = orders.length;
-  const trackingCount = tracking.length;
-  const storeCount = stores.length;
+    return (
+      [...sourceOrders]
+        .sort(
+          (orderA, orderB) =>
+            new Date(orderB.updatedAt || orderB.createdAt).getTime() -
+            new Date(orderA.updatedAt || orderA.createdAt).getTime(),
+        )
+        .find(
+          (order) => order.status !== "delivered" && order.status !== "cancelled",
+        ) || null
+    );
+  }, [orders, tracking]);
 
-  // Extract first name
-  const firstName = user?.name?.split(" ")[0];
+  const activeOrderStepIndex = getTrackingStepIndex(activeOrder?.status);
+  const activeOrderProgress = (activeOrderStepIndex / (TRACKING_STEPS.length - 1)) * 100;
+
+  const activeOrderPartnerPhone =
+    activeOrder?.partnerPhone || activeOrder?.partnerId?.phone || "";
+  const activeOrderOtp = String(activeOrder?.deliveryOTP || "").trim();
+
+  const destinationLocation = toLocation(activeOrder?.customerLocation);
+  const liveLocation = toLocation(activeOrder?.partnerCurrentLocation);
+  const startLocation = liveLocation || destinationLocation;
+
+  const activeOrderEta = activeOrder?.estimatedDelivery
+    ? new Date(activeOrder.estimatedDelivery).toLocaleString([], {
+        month: "short",
+        day: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+      })
+    : "Updating ETA";
+
+  const firstName = user?.name?.split(" ")?.[0] || "User";
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      {/* Header */}
-      <div className="bg-white shadow sticky top-0 z-40">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 py-4 space-y-4">
-          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-            <div>
-              <h1 className="text-lg sm:text-2xl font-bold text-gray-900 truncate">
-                Welcome, {firstName}
-              </h1>
-              <p className="text-sm text-gray-500">
-                Browse stores, manage your cart, and track deliveries in one place.
-              </p>
-            </div>
+    <div
+      className="min-h-screen bg-slate-50 pb-24 text-slate-900"
+      style={{ fontFamily: "'Inter', sans-serif" }}
+    >
+      <div className="mx-auto w-full max-w-6xl px-4 py-4 sm:px-6 sm:py-6">
+        <header className="mb-4 rounded-2xl bg-white p-4 shadow-sm ring-1 ring-slate-100 sm:mb-6 sm:p-6">
+          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-emerald-600">
+            Delivery Dashboard
+          </p>
+          <h1 className="mt-1 text-2xl font-semibold text-slate-900 sm:text-3xl">
+            Welcome back, {firstName}
+          </h1>
+          <p className="mt-2 text-sm text-slate-600">
+            Track active deliveries, discover nearby stores, and manage your orders.
+          </p>
+        </header>
 
-            <div className="flex flex-wrap gap-2">
-              <button
-                onClick={() => {
-                  setActiveTab("shop");
-                  setCartOpen(false);
-                }}
-                className={`px-3 sm:px-4 py-2 rounded text-sm font-medium transition ${
-                  activeTab === "shop"
-                    ? "bg-blue-600 text-white"
-                    : "bg-gray-100 text-gray-700 hover:bg-gray-200"
-                }`}
-              >
-                Shop
-              </button>
-              <button
-                onClick={() => {
-                  setActiveTab("orders");
-                  fetchOrders();
-                  setCartOpen(false);
-                }}
-                className={`px-3 sm:px-4 py-2 rounded text-sm font-medium transition ${
-                  activeTab === "orders"
-                    ? "bg-blue-600 text-white"
-                    : "bg-gray-100 text-gray-700 hover:bg-gray-200"
-                }`}
-              >
-                Orders
-              </button>
-              <button
-                onClick={() => {
-                  setActiveTab("tracking");
-                  fetchTracking();
-                  setCartOpen(false);
-                }}
-                className={`px-3 sm:px-4 py-2 rounded text-sm font-medium transition ${
-                  activeTab === "tracking"
-                    ? "bg-blue-600 text-white"
-                    : "bg-gray-100 text-gray-700 hover:bg-gray-200"
-                }`}
-              >
-                Track
-              </button>
-              <button
-                onClick={() => {
-                  setCartOpen(!cartOpen);
-                  setActiveTab("shop");
-                }}
-                className="relative bg-blue-500 text-white px-3 sm:px-4 py-2 rounded hover:bg-blue-600 transition cursor-pointer text-sm sm:text-base whitespace-nowrap"
-              >
-                Cart ({cartItems})
-              </button>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-            <div className="rounded-lg border border-gray-100 p-3">
-              <p className="text-xs uppercase tracking-wide text-gray-500">Stores</p>
-              <p className="text-lg font-semibold text-gray-900">
-                {loading ? "--" : storeCount}
-              </p>
-            </div>
-            <div className="rounded-lg border border-gray-100 p-3">
-              <p className="text-xs uppercase tracking-wide text-gray-500">Cart Items</p>
-              <p className="text-lg font-semibold text-gray-900">{cartItems}</p>
-            </div>
-            <div className="rounded-lg border border-gray-100 p-3">
-              <p className="text-xs uppercase tracking-wide text-gray-500">Orders</p>
-              <p className="text-lg font-semibold text-gray-900">{orderCount}</p>
-            </div>
-            <div className="rounded-lg border border-gray-100 p-3">
-              <p className="text-xs uppercase tracking-wide text-gray-500">Active Tracks</p>
-              <p className="text-lg font-semibold text-gray-900">{trackingCount}</p>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Tabs - Mobile Scrollable */}
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 mt-4 sm:mt-6">
-        <div className="flex gap-2 sm:gap-4 border-b mb-6 overflow-x-auto pb-2 sm:pb-0 flex-nowrap">
-          <button
-            onClick={() => {
-              setActiveTab("shop");
-              setCartOpen(false);
-            }}
-            className={`px-3 sm:px-6 py-2 sm:py-3 font-semibold border-b-2 transition cursor-pointer text-sm sm:text-base whitespace-nowrap ${
-              activeTab === "shop"
-                ? "border-blue-500 text-blue-600"
-                : "border-transparent text-gray-600 hover:text-gray-900"
-            }`}
-          >
-            🛍️ Shop
-          </button>
-          <button
-            onClick={() => {
-              setActiveTab("orders");
-              fetchOrders();
-              setCartOpen(false);
-            }}
-            className={`px-3 sm:px-6 py-2 sm:py-3 font-semibold border-b-2 transition cursor-pointer text-sm sm:text-base whitespace-nowrap ${
-              activeTab === "orders"
-                ? "border-blue-500 text-blue-600"
-                : "border-transparent text-gray-600 hover:text-gray-900"
-            }`}
-          >
-            📋 Orders
-          </button>
-          <button
-            onClick={() => {
-              setActiveTab("tracking");
-              fetchTracking();
-              setCartOpen(false);
-            }}
-            className={`px-3 sm:px-6 py-2 sm:py-3 font-semibold border-b-2 transition cursor-pointer text-sm sm:text-base whitespace-nowrap ${
-              activeTab === "tracking"
-                ? "border-blue-500 text-blue-600"
-                : "border-transparent text-gray-600 hover:text-gray-900"
-            }`}
-          >
-            📍 Track
-          </button>
-        </div>
-
-        {/* Loading or No Stores */}
-        {loading && !stores.length && activeTab === "shop" && (
-          <div className="max-w-7xl mx-auto px-4 sm:px-6 py-8">
-            <div className="text-center text-gray-500">
-              <p className="mb-2">Loading your shops...</p>
-              <p className="text-sm">Please wait while we fetch available stores.</p>
-            </div>
-          </div>
-        )}
-
-        {!loading && !stores.length && activeTab === "shop" && (
-          <div className="max-w-7xl mx-auto px-4 sm:px-6 py-8">
-            <div className="text-center text-gray-500">
-              <p className="mb-2">No stores available</p>
-              <p className="text-sm">Sorry, there are no stores to browse right now. Please try again later.</p>
-            </div>
-          </div>
-        )}
-
-        {/* SHOP TAB */}
-        {activeTab === "shop" && !cartOpen && stores.length > 0 && (
-          <div>
-            {/* Search Bar */}
-            <div className="bg-white p-4 sm:p-6 rounded-lg shadow mb-4 sm:mb-6">
-              {/* Search Input */}
-              <div className="mb-4">
-                <input
-                  type="text"
-                  placeholder={
-                    selectedStore === "all"
-                      ? "Search all items, stores, categories..."
-                      : "Search in selected store..."
-                  }
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  className="w-full border rounded px-3 sm:px-4 py-2 focus:outline-none focus:border-blue-500 text-sm"
-                />
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 lg:grid-cols-4 gap-4 sm:gap-6">
-              {/* Sidebar Filters - Hidden on Mobile */}
-              <div className="hidden lg:block bg-white p-4 sm:p-6 rounded-lg shadow h-fit">
-                <h3 className="text-lg font-semibold mb-4">Filters</h3>
-
-                {/* Store Selection */}
-                <div className="mb-6">
-                  <label className="block text-sm font-semibold mb-2">
-                    Store
-                  </label>
-                  <select
-                    value={selectedStore}
-                    onChange={(e) => setSelectedStore(e.target.value)}
-                    className="w-full border rounded px-3 py-2 cursor-pointer focus:outline-none focus:border-blue-500 text-sm"
-                  >
-                    <option value="all">🌐 All Stores</option>
-                    {stores.map((store) => (
-                      <option key={store._id} value={store._id}>
-                        {store.storeName}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                {/* Category Filter */}
-                <div>
-                  <label className="block text-sm font-semibold mb-2">
-                    Category
-                  </label>
-                  <select
-                    value={selectedCategory}
-                    onChange={(e) => setSelectedCategory(e.target.value)}
-                    className="w-full border rounded px-3 py-2 cursor-pointer focus:outline-none focus:border-blue-500 text-sm"
-                  >
-                    {categories.map((cat) => (
-                      <option key={cat} value={cat}>
-                        {cat}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                {/* Specifications Filter */}
-                <div>
-                  <label className="block text-sm font-semibold mb-2">
-                    Specifications
-                  </label>
-                  <select
-                    value={selectedSpecification}
-                    onChange={(e) => setSelectedSpecification(e.target.value)}
-                    className="w-full border rounded px-3 py-2 cursor-pointer focus:outline-none focus:border-blue-500 text-sm"
-                  >
-                    {specifications.map((spec) => (
-                      <option key={spec} value={spec}>
-                        {spec}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-
-              {/* Mobile Filters */}
-              <div className="lg:hidden bg-white p-4 rounded-lg shadow space-y-3 mb-4">
-                <div>
-                  <label className="text-xs font-semibold block mb-1">
-                    Store
-                  </label>
-                  <select
-                    value={selectedStore}
-                    onChange={(e) => setSelectedStore(e.target.value)}
-                    className="w-full border rounded px-3 py-2 cursor-pointer focus:outline-none focus:border-blue-500 text-sm"
-                  >
-                    <option value="all">🌐 All Stores</option>
-                    {stores.map((store) => (
-                      <option key={store._id} value={store._id}>
-                        {store.storeName}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div>
-                  <label className="text-xs font-semibold block mb-1">
-                    Category
-                  </label>
-                  <select
-                    value={selectedCategory}
-                    onChange={(e) => setSelectedCategory(e.target.value)}
-                    className="w-full border rounded px-3 py-2 cursor-pointer focus:outline-none focus:border-blue-500 text-sm"
-                  >
-                    {categories.map((cat) => (
-                      <option key={cat} value={cat}>
-                        {cat}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div>
-                  <label className="text-xs font-semibold block mb-1">
-                    Specifications
-                  </label>
-                  <select
-                    value={selectedSpecification}
-                    onChange={(e) => setSelectedSpecification(e.target.value)}
-                    className="w-full border rounded px-3 py-2 cursor-pointer focus:outline-none focus:border-blue-500 text-sm"
-                  >
-                    {specifications.map((spec) => (
-                      <option key={spec} value={spec}>
-                        {spec}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-            </div>
-
-            {/* Items Grid */}
-            <div className="lg:col-span-3">
-              {/* View Mode Toggle */}
-              {filteredItems.length > 0 && (
-                <div className="mb-4 flex gap-2 justify-end">
-                  <button
-                    onClick={() => setViewMode(1)}
-                    className={`px-3 py-2 rounded text-sm font-medium whitespace-nowrap transition ${
-                      viewMode === 1
-                        ? "bg-blue-500 text-white"
-                        : "bg-gray-200 text-gray-700 hover:bg-gray-300"
-                    }`}
-                  >
-                    📱 Single
-                  </button>
-                  <button
-                    onClick={() => setViewMode(2)}
-                    className={`px-3 py-2 rounded text-sm font-medium whitespace-nowrap transition ${
-                      viewMode === 2
-                        ? "bg-blue-500 text-white"
-                        : "bg-gray-200 text-gray-700 hover:bg-gray-300"
-                    }`}
-                  >
-                    📊 2 Col
-                  </button>
-                  <button
-                    onClick={() => setViewMode("list")}
-                    className={`px-3 py-2 rounded text-sm font-medium whitespace-nowrap transition ${
-                      viewMode === "list"
-                        ? "bg-blue-500 text-white"
-                        : "bg-gray-200 text-gray-700 hover:bg-gray-300"
-                    }`}
-                  >
-                    📋 List
-                  </button>
-                </div>
-              )}
-
-              {loading && filteredItems.length === 0 ? (
-                <div className="text-center text-gray-500 py-8">
-                  Loading items...
-                </div>
-              ) : filteredItems.length === 0 ? (
-                <div className="text-center text-gray-500 py-8">
-                  {selectedStore === "all" ? (
-                    selectedCategory === "All" ? (
-                      "Select a category or enter a search term to browse items"
-                    ) : (
-                      `No items found in ${selectedCategory} category`
-                    )
-                  ) : (
-                    searchQuery ? "No items match your search" : "No items available"
-                  )}
-                </div>
-              ) : viewMode === "list" ? (
-                // List View
-                <div className="space-y-3">
-                  {filteredItems.map((item) => (
-                    <div
-                      key={item._id}
-                      onClick={() => {
-                        setSelectedItemDetails(item);
-                        setShowProductModal(true);
-                      }}
-                      className="bg-white rounded-lg shadow hover:shadow-lg transition overflow-hidden cursor-pointer flex gap-4 p-4"
-                    >
-                      {/* Item Image */}
-                      <div className="w-24 h-24 bg-gray-100 flex-shrink-0 flex items-center justify-center overflow-hidden rounded">
-                        {item.image ? (
-                          <img
-                            src={item.image}
-                            alt={item.itemName}
-                            className="w-full h-full object-cover"
-                          />
-                        ) : (
-                          <div className="text-gray-400 text-center text-2xl">📦</div>
-                        )}
-                      </div>
-                      {/* Item Details */}
-                      <div className="flex-grow">
-                        <h3 className="font-semibold text-base mb-1 line-clamp-1">
-                          {item.itemName}
-                        </h3>
-                        <p className="text-xs text-gray-600 mb-1">{item.category}</p>
-                        {selectedStore === "all" && item.storeId && (
-                          <p className="text-xs text-blue-600 font-semibold mb-1">
-                            {item.storeId.storeName}
-                          </p>
-                        )}
-                        <p className="text-xs text-gray-700 mb-2 line-clamp-1">
-                          {item.description}
-                        </p>
-                        <div className="flex justify-between items-center">
-                          <span className="text-lg font-bold text-blue-600">
-                            ${item.price.toFixed(2)}
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                // Grid View (1 or 2 columns)
-                <div
-                  className={`grid gap-3 sm:gap-4 ${
-                    viewMode === 1
-                      ? "grid-cols-1"
-                      : "grid-cols-1 sm:grid-cols-2"
-                  }`}
-                >
-                  {filteredItems.map((item) => (
-                    <div
-                      key={item._id}
-                      onClick={() => {
-                        setSelectedItemDetails(item);
-                        setShowProductModal(true);
-                      }}
-                      className="bg-white rounded-lg shadow hover:shadow-lg transition overflow-hidden cursor-pointer"
-                    >
-                      {/* Item Image */}
-                      <div className="h-40 bg-gray-100 flex items-center justify-center overflow-hidden">
-                        {item.image ? (
-                          <img
-                            src={item.image}
-                            alt={item.itemName}
-                            className="w-full h-full object-cover"
-                          />
-                        ) : (
-                          <div className="text-gray-400 text-center">
-                            <div className="text-4xl">📦</div>
-                            <div className="text-sm">No Image</div>
-                          </div>
-                        )}
-                      </div>
-
-                      {/* Item Details */}
-                      <div className="p-3 sm:p-4">
-                        <h3 className="font-semibold text-base sm:text-lg mb-1 line-clamp-2">
-                          {item.itemName}
-                        </h3>
-                        <p className="text-xs sm:text-sm text-gray-600 mb-1">
-                          {item.category}
-                        </p>
-
-                        {/* Store name for All Stores view */}
-                        {selectedStore === "all" && item.storeId && (
-                          <p className="text-xs text-blue-600 font-semibold mb-1">
-                            {item.storeId.storeName}
-                          </p>
-                        )}
-
-                        <p className="text-xs sm:text-sm text-gray-700 mb-2 line-clamp-2">
-                          {item.description}
-                        </p>
-
-                        {/* Specifications */}
-                        {item.specifications && item.specifications.length > 0 && (
-                          <div className="mb-2">
-                            <p className="text-xs font-semibold text-gray-700 mb-1">
-                              Specs:
-                            </p>
-                            <div className="flex flex-wrap gap-1">
-                              {item.specifications.map((spec, idx) => (
-                                <span
-                                  key={idx}
-                                  className="inline-block bg-blue-100 text-blue-800 px-2 py-1 rounded text-xs"
-                                >
-                                  {spec}
-                                </span>
-                              ))}
-                            </div>
-                          </div>
-                        )}
-
-                        {/* Price */}
-                        <div className="mb-3 gap-2">
-                          <span className="text-xl sm:text-2xl font-bold text-blue-600">
-                            ${item.price.toFixed(2)}
-                          </span>
-                        </div>
-
-                        {/* Add to Cart Button */}
-                        <button
-                          onClick={() => addToCart(item)}
-                          disabled={item.stock === 0}
-                          className="w-full bg-blue-500 text-white py-2 rounded hover:bg-blue-600 transition disabled:bg-gray-400 disabled:cursor-not-allowed cursor-pointer text-sm sm:text-base font-medium"
-                        >
-                          🛒 Add to Cart
-                        </button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-
-        {/* PRODUCT DETAIL MODAL */}
-        {showProductModal && selectedItemDetails && (
-          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4 overflow-y-auto">
-            <div className="bg-white rounded-lg shadow-xl max-w-2xl w-full my-8">
-              {/* Header */}
-              <div className="flex justify-between items-center p-6 border-b">
-                <h2 className="text-2xl font-bold">{selectedItemDetails.itemName}</h2>
+        {activeTab === "home" && (
+          <div className="space-y-6">
+            <section className="sticky top-0 z-30 -mx-4 border-y border-slate-200 bg-white/95 px-4 py-3 backdrop-blur sm:mx-0 sm:rounded-2xl sm:border sm:px-4 sm:shadow-sm">
+              <div className="flex items-center gap-2 sm:gap-3">
+                <label className="relative flex-1">
+                  <Search
+                    size={16}
+                    className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
+                  />
+                  <input
+                    type="text"
+                    value={searchQuery}
+                    onChange={(event) => setSearchQuery(event.target.value)}
+                    placeholder="Search stores, items, or neighborhoods"
+                    className="h-11 w-full rounded-xl border border-slate-200 bg-slate-50 pl-9 pr-3 text-sm outline-none transition focus:border-emerald-400 focus:bg-white"
+                  />
+                </label>
                 <button
-                  onClick={() => {
-                    setShowProductModal(false);
-                    setSelectedItemDetails(null);
-                  }}
-                  className="text-gray-500 hover:text-gray-700 text-2xl font-bold"
+                  type="button"
+                  onClick={() => setShowFilterModal(true)}
+                  className="inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 text-sm font-medium text-slate-700 shadow-sm transition hover:border-slate-300 hover:bg-slate-50"
                 >
-                  ✕
+                  <SlidersHorizontal size={16} />
+                  <span className="hidden sm:inline">Filter</span>
                 </button>
               </div>
+            </section>
 
-              {/* Content */}
-              <div className="p-6 grid grid-cols-1 sm:grid-cols-2 gap-6">
-                {/* Image */}
-                <div className="flex items-center justify-center bg-gray-100 rounded-lg overflow-hidden h-80 sm:h-96">
-                  {selectedItemDetails.image ? (
-                    <img
-                      src={selectedItemDetails.image}
-                      alt={selectedItemDetails.itemName}
-                      className="w-full h-full object-cover"
-                    />
-                  ) : (
-                    <div className="text-gray-400 text-center">
-                      <div className="text-6xl">📦</div>
-                      <div className="text-sm mt-2">No Image Available</div>
-                    </div>
-                  )}
-                </div>
+            <section className="space-y-4">
+              <div className="flex items-center justify-between">
+                <h2 className="text-lg font-semibold text-slate-900 sm:text-xl">Active Order</h2>
+                {activeOrder && (
+                  <span className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-medium text-emerald-700">
+                    {ORDER_STATUS_LABELS[activeOrder.status] || "In Progress"}
+                  </span>
+                )}
+              </div>
 
-                {/* Details */}
-                <div className="space-y-4">
-                  {/* Category & Store */}
-                  <div>
-                    <p className="text-sm text-gray-600">Category</p>
-                    <p className="font-semibold text-lg">{selectedItemDetails.category}</p>
+              {ordersLoading ? (
+                <div className="space-y-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+                  <div className="h-5 w-48 animate-pulse rounded bg-slate-200" />
+                  <div className="h-3 w-full animate-pulse rounded bg-slate-200" />
+                  <div className="h-60 animate-pulse rounded-xl bg-slate-200" />
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="h-12 animate-pulse rounded-xl bg-slate-200" />
+                    <div className="h-12 animate-pulse rounded-xl bg-slate-200" />
                   </div>
+                </div>
+              ) : activeOrder ? (
+                <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+                  <div className="space-y-4 p-4 sm:p-6">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div>
+                        <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">
+                          Order {activeOrder.orderId}
+                        </p>
+                        <p className="mt-1 text-sm text-slate-600">
+                          {activeOrder.items?.length || 0} item(s) • ${Number(
+                            activeOrder.totalAmount || 0,
+                          ).toFixed(2)}
+                        </p>
+                      </div>
+                      <div className="inline-flex items-center gap-2 rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-700">
+                        <Truck size={14} />
+                        {ORDER_STATUS_LABELS[activeOrder.status] || "In Progress"}
+                      </div>
+                    </div>
 
-                  {selectedStore === "all" && selectedItemDetails.storeId && (
-                    <div>
-                      <p className="text-sm text-gray-600">Store</p>
-                      <p className="font-semibold text-blue-600">
-                        {selectedItemDetails.storeId.storeName}
+                    <div className="relative">
+                      <div className="absolute left-0 right-0 top-3 h-1 rounded-full bg-slate-200" />
+                      <div
+                        className="absolute left-0 top-3 h-1 rounded-full bg-emerald-500 transition-all duration-500"
+                        style={{ width: `${activeOrderProgress}%` }}
+                      />
+                      <div className="relative flex justify-between">
+                        {TRACKING_STEPS.map((step, index) => {
+                          const isStepComplete = index <= activeOrderStepIndex;
+
+                          return (
+                            <div
+                              key={step.id}
+                              className="flex w-[30%] flex-col items-center gap-2 text-center"
+                            >
+                              <div
+                                className={`h-6 w-6 rounded-full border-2 ${
+                                  isStepComplete
+                                    ? "border-emerald-500 bg-emerald-500"
+                                    : "border-slate-300 bg-white"
+                                }`}
+                              />
+                              <span
+                                className={`text-xs font-medium ${
+                                  isStepComplete ? "text-emerald-700" : "text-slate-500"
+                                }`}
+                              >
+                                {step.label}
+                              </span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    <div className="rounded-xl border border-emerald-200 bg-emerald-50/80 p-4">
+                      <p className="text-xs font-semibold uppercase tracking-[0.12em] text-emerald-700">
+                        Delivery OTP
+                      </p>
+                      {activeOrderOtp ? (
+                        <div className="mt-2 flex items-center justify-between gap-3">
+                          <p className="text-2xl font-bold tracking-[0.22em] text-emerald-900">
+                            {activeOrderOtp}
+                          </p>
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              try {
+                                await navigator.clipboard.writeText(activeOrderOtp);
+                                toast.success("Delivery OTP copied");
+                              } catch {
+                                toast.error("Unable to copy OTP");
+                              }
+                            }}
+                            className="inline-flex items-center gap-2 rounded-lg border border-emerald-300 bg-white px-3 py-2 text-xs font-semibold text-emerald-700 transition hover:bg-emerald-100"
+                          >
+                            <Copy size={14} />
+                            Copy OTP
+                          </button>
+                        </div>
+                      ) : (
+                        <p className="mt-2 text-sm font-medium text-emerald-700">
+                          OTP will appear here once a partner is assigned.
+                        </p>
+                      )}
+                      <p className="mt-2 text-xs text-emerald-700/90">
+                        Share this OTP with the delivery partner at handoff.
                       </p>
                     </div>
-                  )}
 
-                  {/* Price */}
-                  <div>
-                    <p className="text-sm text-gray-600">Price</p>
-                    <p className="text-3xl font-bold text-blue-600">
-                      ${selectedItemDetails.price.toFixed(2)}
-                    </p>
-                  </div>
-
-                  {/* Description */}
-                  <div>
-                    <p className="text-sm text-gray-600 font-semibold mb-2">Description</p>
-                    <p className="text-gray-700 leading-relaxed">
-                      {selectedItemDetails.description || "No description available"}
-                    </p>
-                  </div>
-
-                  {/* Specifications */}
-                  {selectedItemDetails.specifications &&
-                    selectedItemDetails.specifications.length > 0 && (
-                      <div>
-                        <p className="text-sm text-gray-600 font-semibold mb-2">Specifications</p>
-                        <div className="flex flex-wrap gap-2">
-                          {selectedItemDetails.specifications.map((spec, idx) => (
-                            <span
-                              key={idx}
-                              className="inline-block bg-blue-100 text-blue-800 px-3 py-1 rounded text-sm font-medium"
-                            >
-                              {spec}
-                            </span>
-                          ))}
-                        </div>
+                    {destinationLocation ? (
+                      <LiveRouteMap
+                        startLocation={startLocation}
+                        currentLocation={liveLocation}
+                        endLocation={destinationLocation}
+                        heightClassName="h-64"
+                        currentMarkerStyle="bike"
+                      />
+                    ) : (
+                      <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-600">
+                        Route preview unavailable for this order because customer coordinates are missing.
                       </div>
                     )}
 
-                  {/* Add to Cart Button */}
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      {activeOrderPartnerPhone ? (
+                        <a
+                          href={`tel:${activeOrderPartnerPhone}`}
+                          className="inline-flex h-12 items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 text-sm font-semibold text-white transition hover:bg-emerald-700"
+                        >
+                          <Phone size={16} />
+                          Contact Partner
+                        </a>
+                      ) : (
+                        <button
+                          type="button"
+                          disabled
+                          className="inline-flex h-12 items-center justify-center gap-2 rounded-xl bg-slate-200 px-4 text-sm font-semibold text-slate-500"
+                        >
+                          <Phone size={16} />
+                          Contact Partner
+                        </button>
+                      )}
+
+                      <div className="flex h-12 items-center justify-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-4 text-sm font-medium text-slate-700">
+                        <Clock3 size={16} className="text-emerald-600" />
+                        ETA: {activeOrderEta}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-6 text-center shadow-sm">
+                  <Package size={26} className="mx-auto text-slate-400" />
+                  <h3 className="mt-3 text-base font-semibold text-slate-900">No active order</h3>
+                  <p className="mt-2 text-sm text-slate-600">
+                    You have no deliveries in progress. Browse stores below to place your next order.
+                  </p>
+                </div>
+              )}
+            </section>
+
+            {shouldFetchDiscoveryMatches && (
+              <section className="space-y-4">
+                <div className="flex items-center justify-between gap-3">
+                  <h2 className="text-lg font-semibold text-slate-900 sm:text-xl">Product Results</h2>
+                  <p className="text-xs font-medium text-slate-500 sm:text-sm">
+                    {visibleSearchItems.length} product{visibleSearchItems.length === 1 ? "" : "s"}
+                  </p>
+                </div>
+
+                {discoveryLoading ? (
+                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                    {Array.from({ length: 3 }).map((_, index) => (
+                      <StoreCardSkeleton key={`search-skeleton-${index}`} />
+                    ))}
+                  </div>
+                ) : visibleSearchItems.length > 0 ? (
+                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                    {visibleSearchItems.map((item) => {
+                      const itemStoreId = resolveStoreIdFromItem(item);
+                      const itemStoreName =
+                        typeof item.storeId === "object"
+                          ? item.storeId?.storeName || "Store"
+                          : storeNameById.get(String(itemStoreId)) || "Store";
+                      const itemImage =
+                        item.image ||
+                        `https://picsum.photos/seed/product-${encodeURIComponent(String(item._id || item.itemName || "item"))}/900/600`;
+
+                      return (
+                        <article
+                          key={item._id}
+                          className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm"
+                        >
+                          <img
+                            src={itemImage}
+                            alt={item.itemName}
+                            className="h-40 w-full object-cover"
+                            loading="lazy"
+                          />
+                          <div className="space-y-2 p-4">
+                            <p className="line-clamp-1 text-sm font-semibold text-slate-900">
+                              {item.itemName}
+                            </p>
+                            <p className="line-clamp-1 text-xs text-slate-500">{itemStoreName}</p>
+                            <div className="flex items-center justify-between">
+                              <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700">
+                                {item.category || "General"}
+                              </span>
+                              <span className="text-sm font-semibold text-slate-800">
+                                ${Number(item.price || 0).toFixed(2)}
+                              </span>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => addItemToCart(item, itemStoreId, itemStoreName)}
+                              className="inline-flex h-9 w-full items-center justify-center gap-2 rounded-lg bg-emerald-600 px-3 text-xs font-semibold text-white transition hover:bg-emerald-700"
+                            >
+                              <Plus size={14} />
+                              Add to Cart
+                              {cartQuantityByItemId[String(item._id)] ? (
+                                <span className="rounded bg-white/20 px-1.5 py-0.5 text-[11px]">
+                                  {cartQuantityByItemId[String(item._id)]}
+                                </span>
+                              ) : null}
+                            </button>
+                          </div>
+                        </article>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-6 text-center text-sm text-slate-600 shadow-sm">
+                    No products matched your search. Try another keyword or category.
+                  </div>
+                )}
+              </section>
+            )}
+
+            <section className="space-y-4">
+              <div className="flex items-center justify-between gap-3">
+                <h2 className="text-lg font-semibold text-slate-900 sm:text-xl">Discover Stores</h2>
+                <p className="text-xs font-medium text-slate-500 sm:text-sm">
+                  {visibleStores.length} result{visibleStores.length === 1 ? "" : "s"}
+                </p>
+              </div>
+
+              <div className="-mx-1 flex gap-2 overflow-x-auto px-1 pb-1">
+                {categories.map((category) => {
+                  const isActive = selectedCategory === category;
+
+                  return (
+                    <button
+                      key={category}
+                      type="button"
+                      onClick={() => setSelectedCategory(category)}
+                      className={`shrink-0 rounded-full px-4 py-2 text-sm font-medium transition ${
+                        isActive
+                          ? "bg-emerald-600 text-white shadow-sm"
+                          : "bg-white text-slate-600 ring-1 ring-slate-200 hover:bg-slate-100"
+                      }`}
+                    >
+                      {category}
+                    </button>
+                  );
+                })}
+              </div>
+
+              {storesLoading || discoveryLoading ? (
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                  {Array.from({ length: 6 }).map((_, index) => (
+                    <StoreCardSkeleton key={`store-skeleton-${index}`} />
+                  ))}
+                </div>
+              ) : visibleStores.length > 0 ? (
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                  {visibleStores.map((store) => (
+                    <article
+                      key={store._id}
+                      className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm transition hover:-translate-y-0.5 hover:shadow-md"
+                    >
+                      <div className="relative">
+                        <img
+                          src={store.imageUrl}
+                          alt={`${store.storeName} storefront`}
+                          className="h-44 w-full object-cover"
+                          loading="lazy"
+                        />
+                        <span className="absolute right-3 top-3 rounded-full bg-white/95 px-2.5 py-1 text-xs font-semibold text-slate-700 shadow-sm">
+                          {store.distanceKm} km
+                        </span>
+                      </div>
+                      <div className="space-y-3 p-4">
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <h3 className="line-clamp-1 text-base font-semibold text-slate-900">
+                              {store.storeName}
+                            </h3>
+                            <p className="line-clamp-1 text-xs text-slate-500">
+                              {store.city || "City unavailable"}
+                            </p>
+                          </div>
+                          <div className="inline-flex items-center gap-1 rounded-lg bg-amber-50 px-2 py-1 text-xs font-semibold text-amber-700">
+                            <Star size={13} className="fill-amber-400 text-amber-400" />
+                            {store.rating}
+                          </div>
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={() => handleViewStore(store._id)}
+                          className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 text-sm font-medium text-slate-700 transition hover:bg-slate-100"
+                        >
+                          <Store size={15} />
+                          View Store
+                          <ChevronRight size={14} />
+                        </button>
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              ) : (
+                <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-8 text-center shadow-sm">
+                  <MapPinned size={26} className="mx-auto text-slate-400" />
+                  <h3 className="mt-3 text-base font-semibold text-slate-900">No stores found</h3>
+                  <p className="mt-2 text-sm text-slate-600">
+                    Try another search term or switch categories to discover more stores.
+                  </p>
+                </div>
+              )}
+            </section>
+
+            {selectedStore && (
+              <section className="space-y-4">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <h2 className="text-lg font-semibold text-slate-900 sm:text-xl">
+                      {selectedStore.storeName} Products
+                    </h2>
+                    <p className="text-xs text-slate-500">
+                      {visibleSelectedStoreItems.length} available item
+                      {visibleSelectedStoreItems.length === 1 ? "" : "s"}
+                    </p>
+                  </div>
                   <button
+                    type="button"
                     onClick={() => {
-                      addToCart(selectedItemDetails);
-                      setShowProductModal(false);
-                      setSelectedItemDetails(null);
+                      setSelectedStoreId("");
+                      setSelectedStoreItems([]);
                     }}
-                    disabled={selectedItemDetails.stock === 0}
-                    className="w-full bg-blue-500 text-white py-3 rounded font-semibold hover:bg-blue-600 transition disabled:bg-gray-400 disabled:cursor-not-allowed text-lg"
+                    className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50"
                   >
-                    {selectedItemDetails.stock > 0 ? "🛒 Add to Cart" : "Out of Stock"}
+                    <X size={14} />
+                    Close
                   </button>
                 </div>
-              </div>
-            </div>
+
+                {selectedStoreItemsLoading ? (
+                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                    {Array.from({ length: 6 }).map((_, index) => (
+                      <StoreCardSkeleton key={`selected-store-skeleton-${index}`} />
+                    ))}
+                  </div>
+                ) : visibleSelectedStoreItems.length > 0 ? (
+                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                    {visibleSelectedStoreItems.map((item) => {
+                      const itemImage =
+                        item.image ||
+                        `https://picsum.photos/seed/store-item-${encodeURIComponent(String(item._id || item.itemName || "item"))}/900/600`;
+
+                      return (
+                        <article
+                          key={item._id}
+                          className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm"
+                        >
+                          <img
+                            src={itemImage}
+                            alt={item.itemName}
+                            className="h-40 w-full object-cover"
+                            loading="lazy"
+                          />
+                          <div className="space-y-2 p-4">
+                            <h3 className="line-clamp-1 text-sm font-semibold text-slate-900">
+                              {item.itemName}
+                            </h3>
+                            <p className="line-clamp-2 text-xs text-slate-500">
+                              {item.description || "No description available"}
+                            </p>
+                            <div className="flex items-center justify-between">
+                              <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-700">
+                                {item.category || "General"}
+                              </span>
+                              <span className="text-sm font-semibold text-emerald-700">
+                                ${Number(item.price || 0).toFixed(2)}
+                              </span>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                addItemToCart(item, selectedStore?._id, selectedStore?.storeName)
+                              }
+                              className="inline-flex h-9 w-full items-center justify-center gap-2 rounded-lg bg-emerald-600 px-3 text-xs font-semibold text-white transition hover:bg-emerald-700"
+                            >
+                              <Plus size={14} />
+                              Add to Cart
+                              {cartQuantityByItemId[String(item._id)] ? (
+                                <span className="rounded bg-white/20 px-1.5 py-0.5 text-[11px]">
+                                  {cartQuantityByItemId[String(item._id)]}
+                                </span>
+                              ) : null}
+                            </button>
+                          </div>
+                        </article>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-6 text-center text-sm text-slate-600 shadow-sm">
+                    No in-stock products found for this store with current filters.
+                  </div>
+                )}
+              </section>
+            )}
           </div>
         )}
 
-        {/* CART SIDEBAR */}
-        {cartOpen && (
-          <div className="max-w-2xl mx-auto bg-white rounded-lg shadow p-4 sm:p-6">
-            <div className="flex justify-between items-center mb-4">
-              <h2 className="text-xl sm:text-2xl font-bold">Shopping Cart</h2>
+        {activeTab === "orders" && (
+          <section className="space-y-4">
+            <header className="rounded-2xl bg-white p-4 shadow-sm ring-1 ring-slate-100 sm:p-6">
+              <h2 className="text-lg font-semibold text-slate-900 sm:text-xl">My Orders</h2>
+              <p className="mt-1 text-sm text-slate-600">Complete history of your recent deliveries.</p>
+            </header>
+
+            {ordersLoading ? (
+              <div className="space-y-3">
+                {Array.from({ length: 4 }).map((_, index) => (
+                  <div
+                    key={`order-skeleton-${index}`}
+                    className="space-y-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"
+                  >
+                    <div className="h-4 w-48 animate-pulse rounded bg-slate-200" />
+                    <div className="h-3 w-64 animate-pulse rounded bg-slate-200" />
+                    <div className="h-10 animate-pulse rounded-xl bg-slate-200" />
+                  </div>
+                ))}
+              </div>
+            ) : orders.length > 0 ? (
+              <div className="space-y-3">
+                {orders.map((order) => (
+                  <article
+                    key={order._id}
+                    className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5"
+                  >
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-semibold text-slate-900">{order.orderId}</p>
+                        <p className="text-xs text-slate-500">
+                          {new Date(order.createdAt).toLocaleString([], {
+                            month: "short",
+                            day: "numeric",
+                            hour: "2-digit",
+                            minute: "2-digit",
+                          })}
+                        </p>
+                      </div>
+
+                      <span
+                        className={`rounded-full px-3 py-1 text-xs font-semibold ${
+                          order.status === "delivered"
+                            ? "bg-emerald-50 text-emerald-700"
+                            : order.status === "cancelled"
+                              ? "bg-rose-50 text-rose-700"
+                              : "bg-blue-50 text-blue-700"
+                        }`}
+                      >
+                        {ORDER_STATUS_LABELS[order.status] || "Processing"}
+                      </span>
+                    </div>
+
+                    <div className="mt-4 grid gap-3 text-sm text-slate-700 sm:grid-cols-3">
+                      <div className="rounded-xl bg-slate-50 p-3">
+                        <p className="text-xs text-slate-500">Items</p>
+                        <p className="mt-1 font-semibold">{order.items?.length || 0}</p>
+                      </div>
+                      <div className="rounded-xl bg-slate-50 p-3">
+                        <p className="text-xs text-slate-500">Total</p>
+                        <p className="mt-1 font-semibold">${Number(order.totalAmount || 0).toFixed(2)}</p>
+                      </div>
+                      <div className="rounded-xl bg-slate-50 p-3">
+                        <p className="text-xs text-slate-500">ETA</p>
+                        <p className="mt-1 font-semibold">
+                          {order.estimatedDelivery
+                            ? new Date(order.estimatedDelivery).toLocaleTimeString([], {
+                                hour: "2-digit",
+                                minute: "2-digit",
+                              })
+                            : "Not available"}
+                        </p>
+                      </div>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            ) : (
+              <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-8 text-center shadow-sm">
+                <Package size={26} className="mx-auto text-slate-400" />
+                <h3 className="mt-3 text-base font-semibold text-slate-900">No orders yet</h3>
+                <p className="mt-2 text-sm text-slate-600">
+                  Once you place an order, it will appear here with status and ETA.
+                </p>
+              </div>
+            )}
+          </section>
+        )}
+
+        {activeTab === "account" && (
+          <section className="space-y-4">
+            <header className="rounded-2xl bg-white p-4 shadow-sm ring-1 ring-slate-100 sm:p-6">
+              <h2 className="text-lg font-semibold text-slate-900 sm:text-xl">Account</h2>
+              <p className="mt-1 text-sm text-slate-600">Your profile and delivery activity summary.</p>
+            </header>
+
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+              <article className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+                <div className="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-50 text-emerald-700">
+                  <UserRound size={18} />
+                </div>
+                <p className="mt-3 text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">
+                  Profile
+                </p>
+                <p className="mt-1 text-base font-semibold text-slate-900">{user?.name || "Unknown user"}</p>
+                <p className="text-sm text-slate-600">{user?.email || "No email available"}</p>
+              </article>
+
+              <article className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+                <div className="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-blue-50 text-blue-700">
+                  <Package size={18} />
+                </div>
+                <p className="mt-3 text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">
+                  Total Orders
+                </p>
+                <p className="mt-1 text-2xl font-semibold text-slate-900">{orders.length}</p>
+              </article>
+
+              <article className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:col-span-2 lg:col-span-1">
+                <div className="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-amber-50 text-amber-700">
+                  <Truck size={18} />
+                </div>
+                <p className="mt-3 text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">
+                  Active Deliveries
+                </p>
+                <p className="mt-1 text-2xl font-semibold text-slate-900">{tracking.length}</p>
+              </article>
+            </div>
+          </section>
+        )}
+
+        {activeTab === "home" && cartItemsCount > 0 && (
+          <button
+            type="button"
+            onClick={() => setCartOpen(true)}
+            className="fixed bottom-20 right-4 z-40 inline-flex items-center gap-2 rounded-full bg-emerald-600 px-4 py-3 text-sm font-semibold text-white shadow-lg transition hover:bg-emerald-700 sm:bottom-24 sm:right-6"
+          >
+            <ShoppingCart size={16} />
+            {cartItemsCount} item{cartItemsCount === 1 ? "" : "s"}
+            <span className="rounded bg-white/20 px-2 py-0.5">${cartTotalAmount.toFixed(2)}</span>
+          </button>
+        )}
+      </div>
+
+      {cartOpen && (
+        <div className="fixed inset-0 z-50 flex items-end bg-slate-900/45 p-0 sm:items-center sm:justify-center sm:p-4">
+          <div className="max-h-[88vh] w-full overflow-y-auto rounded-t-2xl bg-white p-4 shadow-2xl sm:max-h-[85vh] sm:max-w-2xl sm:rounded-2xl sm:p-6">
+            <div className="mb-4 flex items-center justify-between">
+              <h3 className="text-lg font-semibold text-slate-900">Cart</h3>
               <button
+                type="button"
                 onClick={() => setCartOpen(false)}
-                className="text-gray-500 hover:text-gray-700 text-2xl"
+                className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-slate-500 transition hover:bg-slate-100 hover:text-slate-700"
               >
-                ✕
+                <X size={16} />
               </button>
             </div>
 
             {cart.length === 0 ? (
-              <div className="text-center text-gray-500 py-8">
-                Your cart is empty
+              <div className="rounded-xl border border-dashed border-slate-300 p-6 text-center text-sm text-slate-600">
+                Your cart is empty.
               </div>
             ) : (
               <>
-                {/* Cart Items */}
-                <div className="space-y-3 mb-6 max-h-72 sm:max-h-96 overflow-y-auto">
-                  {cart.map((item) => (
-                    <div
-                      key={item._id}
-                      className="border rounded p-3 flex gap-3"
+                <div className="space-y-3">
+                  {cart.map((cartItem) => (
+                    <article
+                      key={`${cartItem._id}-${cartItem.storeId}`}
+                      className="rounded-xl border border-slate-200 p-3"
                     >
-                      {item.image && (
+                      <div className="flex gap-3">
                         <img
-                          src={item.image}
-                          alt={item.itemName}
-                          className="w-14 h-14 sm:w-16 sm:h-16 rounded object-cover flex-shrink-0"
+                          src={
+                            cartItem.image ||
+                            `https://picsum.photos/seed/cart-${encodeURIComponent(String(cartItem._id))}/300/200`
+                          }
+                          alt={cartItem.itemName}
+                          className="h-14 w-14 rounded-md object-cover"
+                          loading="lazy"
                         />
-                      )}
-                      <div className="flex-1 min-w-0">
-                        <h4 className="font-semibold text-sm sm:text-base line-clamp-1">
-                          {item.itemName}
-                        </h4>
-                        <p className="text-xs sm:text-sm text-gray-600">
-                          ${item.price.toFixed(2)} each
-                        </p>
-                        <div className="flex items-center gap-2 mt-2">
-                          <button
-                            onClick={() =>
-                              updateCartQuantity(item._id, item.quantity - 1)
-                            }
-                            className="px-2 py-1 bg-gray-200 rounded hover:bg-gray-300 cursor-pointer text-sm"
-                          >
-                            −
-                          </button>
-                          <span className="w-6 text-center text-sm">
-                            {item.quantity}
-                          </span>
-                          <button
-                            onClick={() =>
-                              updateCartQuantity(item._id, item.quantity + 1)
-                            }
-                            className="px-2 py-1 bg-gray-200 rounded hover:bg-gray-300 cursor-pointer text-sm"
-                          >
-                            +
-                          </button>
-                          <button
-                            onClick={() => removeFromCart(item._id)}
-                            className="ml-auto text-red-500 hover:text-red-700 font-semibold text-xs"
-                          >
-                            Remove
-                          </button>
+                        <div className="flex-1">
+                          <p className="line-clamp-1 text-sm font-semibold text-slate-900">
+                            {cartItem.itemName}
+                          </p>
+                          <p className="line-clamp-1 text-xs text-slate-500">
+                            {cartItem.storeName || storeNameById.get(String(cartItem.storeId)) || "Store"}
+                          </p>
+                          <p className="text-xs font-medium text-emerald-700">
+                            ${Number(cartItem.price || 0).toFixed(2)}
+                          </p>
                         </div>
+                        <button
+                          type="button"
+                          onClick={() => removeFromCart(cartItem._id)}
+                          className="inline-flex h-8 w-8 items-center justify-center rounded-md text-rose-600 transition hover:bg-rose-50"
+                        >
+                          <Trash2 size={14} />
+                        </button>
                       </div>
-                      <div className="text-right flex-shrink-0">
-                        <p className="font-bold text-sm sm:text-base">
-                          ${(item.price * item.quantity).toFixed(2)}
-                        </p>
+
+                      <div className="mt-3 flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            updateCartQuantity(cartItem._id, Number(cartItem.quantity || 0) - 1)
+                          }
+                          className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-slate-200 text-slate-700"
+                        >
+                          <Minus size={14} />
+                        </button>
+                        <span className="min-w-8 text-center text-sm font-semibold text-slate-800">
+                          {Number(cartItem.quantity || 0)}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            updateCartQuantity(cartItem._id, Number(cartItem.quantity || 0) + 1)
+                          }
+                          className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-slate-200 text-slate-700"
+                        >
+                          <Plus size={14} />
+                        </button>
                       </div>
-                    </div>
+                    </article>
                   ))}
                 </div>
 
-                {/* Cart Summary */}
-                <div className="border-t pt-4 space-y-2">
-                  {cartBreakdown.length > 0 && (
-                    <div className="rounded border border-gray-200 p-3 space-y-2 mb-3">
-                      <p className="text-sm font-semibold text-gray-700">Store Split</p>
-                      {cartBreakdown.map((group) => (
-                        <div
-                          key={group.storeId}
-                          className="flex items-center justify-between text-xs sm:text-sm text-gray-600"
-                        >
-                          <span className="line-clamp-1">{group.storeName}</span>
-                          <span>
-                            {group.lineItems} items | ${group.total.toFixed(2)}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  )}
+                <div className="mt-5 space-y-3 border-t border-slate-200 pt-4">
+                  <DeliveryLocationPicker
+                    value={deliveryLocation}
+                    onChange={setDeliveryLocation}
+                    onAddressResolved={(resolvedAddress) =>
+                      setCheckoutForm((previousForm) => ({
+                        ...previousForm,
+                        deliveryAddress: resolvedAddress || previousForm.deliveryAddress,
+                      }))
+                    }
+                  />
 
-                  <div className="space-y-2 mb-3">
-                    <DeliveryLocationPicker
-                      value={deliveryLocation}
-                      onChange={setDeliveryLocation}
-                      onAddressResolved={(address) =>
-                        setCheckoutForm((prev) => ({
-                          ...prev,
-                          deliveryAddress: address || prev.deliveryAddress,
-                        }))
-                      }
-                    />
-
+                  <label className="block">
+                    <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">
+                      Delivery Address
+                    </span>
                     <input
                       type="text"
-                      placeholder="Delivery address"
                       value={checkoutForm.deliveryAddress}
                       onChange={(event) =>
-                        setCheckoutForm((prev) => ({
-                          ...prev,
+                        setCheckoutForm((previousForm) => ({
+                          ...previousForm,
                           deliveryAddress: event.target.value,
                         }))
                       }
-                      className="w-full border rounded px-3 py-2 text-sm focus:outline-none focus:border-blue-500"
+                      placeholder="Enter full delivery address"
+                      className="h-10 w-full rounded-lg border border-slate-200 px-3 text-sm outline-none focus:border-emerald-400"
                     />
+                  </label>
+
+                  <label className="block">
+                    <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">
+                      Phone Number
+                    </span>
                     <input
                       type="tel"
-                      placeholder="Phone number"
                       value={checkoutForm.clientPhone}
                       onChange={(event) =>
-                        setCheckoutForm((prev) => ({
-                          ...prev,
+                        setCheckoutForm((previousForm) => ({
+                          ...previousForm,
                           clientPhone: event.target.value,
                         }))
                       }
-                      className="w-full border rounded px-3 py-2 text-sm focus:outline-none focus:border-blue-500"
+                      placeholder="Enter phone number"
+                      className="h-10 w-full rounded-lg border border-slate-200 px-3 text-sm outline-none focus:border-emerald-400"
                     />
-                  </div>
+                  </label>
 
-                  <div className="flex justify-between mb-4">
-                    <span className="font-semibold text-base">Total:</span>
-                    <span className="text-xl sm:text-2xl font-bold text-blue-600">
-                      ${cartTotal.toFixed(2)}
+                  <div className="flex items-center justify-between rounded-lg bg-slate-50 px-3 py-2">
+                    <span className="text-sm font-medium text-slate-600">Total</span>
+                    <span className="text-lg font-semibold text-slate-900">
+                      ${cartTotalAmount.toFixed(2)}
                     </span>
                   </div>
+
                   <button
+                    type="button"
                     onClick={placeOrder}
                     disabled={placingOrder}
-                    className="w-full bg-green-500 text-white py-3 rounded hover:bg-green-600 transition cursor-pointer font-semibold text-sm sm:text-base disabled:opacity-70 disabled:cursor-not-allowed"
+                    className="inline-flex h-11 w-full items-center justify-center rounded-lg bg-emerald-600 px-4 text-sm font-semibold text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
                   >
-                    {placingOrder ? "Placing order..." : "Checkout"}
-                  </button>
-                  <button
-                    onClick={() => setCartOpen(false)}
-                    className="w-full bg-gray-300 text-gray-700 py-2 rounded hover:bg-gray-400 transition cursor-pointer text-sm sm:text-base"
-                  >
-                    Continue Shopping
+                    {placingOrder ? "Placing order..." : "Place Order"}
                   </button>
                 </div>
               </>
             )}
           </div>
-        )}
+        </div>
+      )}
 
-        {/* ORDER HISTORY TAB */}
-        {activeTab === "orders" && (
-          <div className="bg-white rounded-lg shadow p-4 sm:p-6">
-            {loading ? (
-              <div className="text-center text-gray-500 py-8">
-                Loading orders...
+      <UserBottomNav activeTab={activeTab} onTabChange={setActiveTab} />
+
+      {showFilterModal && (
+        <div className="fixed inset-0 z-50 flex items-end bg-slate-900/40 p-4 sm:items-center sm:justify-center">
+          <div className="w-full rounded-2xl bg-white p-5 shadow-2xl sm:max-w-sm">
+            <div className="mb-4 flex items-center justify-between">
+              <div className="inline-flex items-center gap-2 text-slate-800">
+                <ArrowUpDown size={16} />
+                <h3 className="text-base font-semibold">Sort Stores</h3>
               </div>
-            ) : orders.length === 0 ? (
-              <div className="text-center text-gray-500 py-8">
-                No orders yet. Start shopping!
-              </div>
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm sm:text-base">
-                  <thead className="bg-gray-100">
-                    <tr>
-                      <th className="px-2 sm:px-6 py-3 text-left text-xs sm:text-sm font-semibold">
-                        Order ID
-                      </th>
-                      <th className="px-2 sm:px-6 py-3 text-left text-xs sm:text-sm font-semibold">
-                        Date
-                      </th>
-                      <th className="px-2 sm:px-6 py-3 text-left text-xs sm:text-sm font-semibold">
-                        Items
-                      </th>
-                      <th className="px-2 sm:px-6 py-3 text-left text-xs sm:text-sm font-semibold">
-                        Amount
-                      </th>
-                      <th className="px-2 sm:px-6 py-3 text-left text-xs sm:text-sm font-semibold">
-                        Status
-                      </th>
-                      <th className="px-2 sm:px-6 py-3 text-left text-xs sm:text-sm font-semibold">
-                        Action
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y">
-                    {orders.map((order) => (
-                      <tr key={order._id} className="hover:bg-gray-50">
-                        <td className="px-2 sm:px-6 py-4 font-semibold text-xs sm:text-sm line-clamp-1">
-                          {order.orderId}
-                        </td>
-                        <td className="px-2 sm:px-6 py-4 text-xs sm:text-sm">
-                          {new Date(order.createdAt).toLocaleDateString()}
-                        </td>
-                        <td className="px-2 sm:px-6 py-4 text-xs sm:text-sm">
-                          {order.items?.reduce((sum, item) => sum + Number(item.quantity || 0), 0) || 0}
-                        </td>
-                        <td className="px-2 sm:px-6 py-4 font-semibold text-xs sm:text-sm">
-                          ${order.totalAmount.toFixed(2)}
-                        </td>
-                        <td className="px-2 sm:px-6 py-4">
-                          <span
-                            className={`px-2 sm:px-3 py-1 rounded-full text-xs font-semibold ${
-                              order.status === "delivered"
-                                ? "bg-green-100 text-green-800"
-                                : order.status === "shipped"
-                                  ? "bg-blue-100 text-blue-800"
-                                  : order.status === "in_transit"
-                                    ? "bg-orange-100 text-orange-800"
-                                    : "bg-yellow-100 text-yellow-800"
-                            }`}
-                          >
-                            {ORDER_STATUS_LABELS[order.status] || order.status.replace(/_/g, " ")}
-                          </span>
-                        </td>
-                        <td className="px-2 sm:px-6 py-4">
-                          <button
-                            onClick={() => reorderOrder(order)}
-                            className="px-2 py-1 rounded bg-blue-50 text-blue-700 hover:bg-blue-100 text-xs sm:text-sm font-medium"
-                          >
-                            Reorder
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
+              <button
+                type="button"
+                onClick={() => setShowFilterModal(false)}
+                className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-slate-500 transition hover:bg-slate-100 hover:text-slate-700"
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            <div className="space-y-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setSortBy("fastest");
+                  setShowFilterModal(false);
+                }}
+                className={`flex w-full items-center justify-between rounded-xl px-3 py-3 text-left text-sm font-medium transition ${
+                  sortBy === "fastest"
+                    ? "bg-emerald-50 text-emerald-700"
+                    : "bg-slate-50 text-slate-700 hover:bg-slate-100"
+                }`}
+              >
+                <span>Fastest Delivery</span>
+                {sortBy === "fastest" && <span className="text-xs font-semibold">Selected</span>}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setSortBy("top_rated");
+                  setShowFilterModal(false);
+                }}
+                className={`flex w-full items-center justify-between rounded-xl px-3 py-3 text-left text-sm font-medium transition ${
+                  sortBy === "top_rated"
+                    ? "bg-emerald-50 text-emerald-700"
+                    : "bg-slate-50 text-slate-700 hover:bg-slate-100"
+                }`}
+              >
+                <span>Top Rated</span>
+                {sortBy === "top_rated" && <span className="text-xs font-semibold">Selected</span>}
+              </button>
+            </div>
           </div>
-        )}
-
-        {/* TRACKING TAB */}
-        {activeTab === "tracking" && (
-          <div className="bg-white rounded-lg shadow p-4 sm:p-6">
-            {loading ? (
-              <div className="text-center text-gray-500 py-8">
-                Loading tracking info...
-              </div>
-            ) : tracking.length === 0 ? (
-              <div className="text-center text-gray-500 py-8">
-                <div className="text-6xl mb-4">📍</div>
-                No active deliveries. Place an order to track it!
-              </div>
-            ) : (
-              <div className="space-y-4 sm:space-y-6">
-                {tracking.map((delivery) => {
-                  const destinationLocation = {
-                    lat: Number(delivery.customerLocation?.lat),
-                    lng: Number(delivery.customerLocation?.lng),
-                  };
-                  const hasDestinationLocation =
-                    Number.isFinite(destinationLocation.lat) &&
-                    Number.isFinite(destinationLocation.lng);
-                  const liveLocation = delivery.partnerCurrentLocation;
-                  const hasLiveLocation =
-                    Number.isFinite(Number(liveLocation?.lat)) &&
-                    Number.isFinite(Number(liveLocation?.lng));
-                  const lastLocationUpdate = liveLocation?.updatedAt
-                    ? new Date(liveLocation.updatedAt).toLocaleTimeString()
-                    : null;
-
-                  return (
-                    <div
-                      key={delivery._id}
-                      className="border rounded-lg p-4 sm:p-6 bg-gradient-to-r from-blue-50 to-purple-50"
-                    >
-                      <div className="flex justify-between items-start mb-4 gap-2">
-                        <div className="min-w-0">
-                          <h3 className="text-base sm:text-lg font-bold line-clamp-1">
-                            {delivery.orderId}
-                          </h3>
-                          <p className="text-xs sm:text-sm text-gray-600 line-clamp-1">
-                            Driver:{" "}
-                            {delivery.partnerId?.name ||
-                              delivery.partnerName ||
-                              "Assigning partner"}
-                          </p>
-                        </div>
-                        <span
-                          className={`px-2 sm:px-4 py-1 rounded-full font-semibold text-xs sm:text-sm whitespace-nowrap flex-shrink-0 ${
-                            delivery.status === "delivered"
-                              ? "bg-green-100 text-green-800"
-                              : delivery.status === "in_transit"
-                                ? "bg-orange-100 text-orange-800"
-                                : "bg-blue-100 text-blue-800"
-                          }`}
-                        >
-                          {ORDER_STATUS_LABELS[delivery.status] || delivery.status.replace(/_/g, " ")}
-                        </span>
-                      </div>
-
-                      {/* Progress */}
-                      <div className="space-y-3">
-                        <div className="flex items-center justify-between text-xs text-gray-600">
-                          <span>Progress</span>
-                          <span>{getOrderProgress(delivery.status)}%</span>
-                        </div>
-                        <div className="w-full h-2 bg-white rounded-full overflow-hidden border border-blue-100">
-                          <div
-                            className="h-full bg-blue-500 transition-all"
-                            style={{ width: `${getOrderProgress(delivery.status)}%` }}
-                          />
-                        </div>
-                        <div className="grid grid-cols-1 sm:grid-cols-5 gap-2">
-                          {ORDER_STATUS_FLOW.map((step, index) => {
-                            const currentIndex = ORDER_STATUS_FLOW.indexOf(delivery.status);
-                            const completed = currentIndex >= index;
-                            return (
-                              <div key={step} className="flex items-center gap-2">
-                                <span
-                                  className={`w-2.5 h-2.5 rounded-full ${
-                                    completed ? "bg-blue-600" : "bg-gray-300"
-                                  }`}
-                                />
-                                <span
-                                  className={`text-xs ${
-                                    completed ? "text-blue-700 font-medium" : "text-gray-500"
-                                  }`}
-                                >
-                                  {ORDER_STATUS_LABELS[step]}
-                                </span>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      </div>
-
-                      {hasDestinationLocation && (
-                        <div className="mt-5 rounded-xl border border-blue-100 bg-white/80 p-3">
-                          <LiveRouteMap
-                            startLocation={hasLiveLocation ? liveLocation : null}
-                            endLocation={destinationLocation}
-                            currentLocation={hasLiveLocation ? liveLocation : null}
-                            heightClassName="h-56"
-                          />
-                          <p className="mt-2 text-xs text-gray-600">
-                            {hasLiveLocation
-                              ? `Partner live location updated at ${lastLocationUpdate}`
-                              : "Live route will appear once partner starts sharing location."}
-                          </p>
-                        </div>
-                      )}
-
-                      {!hasDestinationLocation && (
-                        <p className="mt-5 text-xs text-gray-600">
-                          Map preview unavailable because this order has no location coordinates.
-                        </p>
-                      )}
-
-                      {/* Delivery Info */}
-                      <div className="mt-6 grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4 pt-4 border-t text-sm sm:text-base">
-                        <div className="min-w-0">
-                          <p className="text-xs sm:text-sm text-gray-600">Delivery Address</p>
-                          <p className="font-semibold line-clamp-2">{delivery.deliveryAddress}</p>
-                        </div>
-                        <div>
-                          <p className="text-xs sm:text-sm text-gray-600">Amount</p>
-                          <p className="font-semibold">${delivery.totalAmount.toFixed(2)}</p>
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-        )}
-      </div>
+        </div>
+      )}
     </div>
   );
 };
 
 export default UserDashboard;
+

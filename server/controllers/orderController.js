@@ -19,6 +19,18 @@ const STATUS_FLOW = [
   ORDER_STATUS.DELIVERED,
 ];
 
+const generateDeliveryOTP = () => `${Math.floor(1000 + Math.random() * 9000)}`;
+
+const emitDeliveryOTPToUser = (order, deliveryOTP) => {
+  if (!order?.clientId || !deliveryOTP) return;
+
+  const io = getIO();
+  io.to(`user:${order.clientId}`).emit("order:user:delivery-otp", {
+    orderId: order._id,
+    deliveryOTP,
+  });
+};
+
 const syncPartnerAvailability = async (partnerId) => {
   if (!partnerId) return;
 
@@ -226,6 +238,7 @@ export const updateOrderStatus = async (req, res) => {
   try {
     const { orderId } = req.params;
     const { status, partnerId, estimatedDelivery, proofOfDeliveryImage } = req.body;
+    const normalizedStatus = typeof status === "string" ? status.trim() : status;
 
     const order = await orderModel.findById(orderId);
 
@@ -233,18 +246,24 @@ export const updateOrderStatus = async (req, res) => {
       return res.status(404).json({ message: "Order not found" });
     }
 
-    if (!isValidStatusTransition(order.status, status)) {
+    if (!isValidStatusTransition(order.status, normalizedStatus)) {
       return res.status(400).json({
-        message: `Invalid status transition from ${order.status} to ${status}`,
+        message: `Invalid status transition from ${order.status} to ${normalizedStatus}`,
+      });
+    }
+
+    if (normalizedStatus === ORDER_STATUS.DELIVERED) {
+      return res.status(400).json({
+        message: "Use OTP verification endpoint to complete this delivery",
       });
     }
 
     const updates = {
-      status,
+      status: normalizedStatus,
       estimatedDelivery,
     };
 
-    if (status === ORDER_STATUS.PARTNER_ASSIGNED) {
+    if (normalizedStatus === ORDER_STATUS.PARTNER_ASSIGNED) {
       const selectedPartner = partnerId;
 
       if (!selectedPartner) {
@@ -255,12 +274,12 @@ export const updateOrderStatus = async (req, res) => {
 
       updates.partnerId = selectedPartner;
       updates.shippedAt = new Date();
+      updates.deliveryOTP = generateDeliveryOTP();
+      updates.isVerified = false;
     }
 
-    if (status === ORDER_STATUS.DELIVERED) {
-      updates.deliveredAt = new Date();
-      updates.actualDelivery = new Date();
-      if (proofOfDeliveryImage) updates.proofOfDeliveryImage = proofOfDeliveryImage;
+    if (normalizedStatus === ORDER_STATUS.CANCELLED && proofOfDeliveryImage) {
+      updates.proofOfDeliveryImage = proofOfDeliveryImage;
     }
 
     const updatedOrder = await orderModel
@@ -268,16 +287,20 @@ export const updateOrderStatus = async (req, res) => {
       .populate("partnerId", "name phone vehicle")
       .populate("storeId", "storeName address city phone");
 
-    if (status === ORDER_STATUS.PREPARING) {
+    if (normalizedStatus === ORDER_STATUS.PREPARING) {
       emitPartnerJobPoolAlert(updatedOrder, 8);
     }
 
-    if (status === ORDER_STATUS.PARTNER_ASSIGNED && updatedOrder.partnerId?._id) {
+    if (normalizedStatus === ORDER_STATUS.PARTNER_ASSIGNED) {
+      emitDeliveryOTPToUser(updatedOrder, updates.deliveryOTP);
+    }
+
+    if (normalizedStatus === ORDER_STATUS.PARTNER_ASSIGNED && updatedOrder.partnerId?._id) {
       await syncPartnerAvailability(updatedOrder.partnerId._id);
     }
 
     if (
-      (status === ORDER_STATUS.DELIVERED || status === ORDER_STATUS.CANCELLED) &&
+      (normalizedStatus === ORDER_STATUS.DELIVERED || normalizedStatus === ORDER_STATUS.CANCELLED) &&
       updatedOrder.partnerId?._id
     ) {
       await syncPartnerAvailability(updatedOrder.partnerId._id);
@@ -400,6 +423,7 @@ export const getUserTracking = async (req, res) => {
           ],
         },
       })
+      .select("+deliveryOTP")
       .sort({ createdAt: -1 })
       .populate("partnerId", "name phone vehicle");
 
@@ -410,6 +434,73 @@ export const getUserTracking = async (req, res) => {
     });
   } catch (error) {
     res.status(500).json({ message: error.message });
+  }
+};
+
+export const verifyAndCompleteOrder = async (req, res) => {
+  try {
+    const { orderId } = req.params;
+    const { partnerId, deliveryOTP, proofOfDeliveryImage } = req.body;
+
+    if (!partnerId) {
+      return res.status(400).json({ message: "partnerId is required" });
+    }
+
+    const normalizedDeliveryOTP = String(deliveryOTP || "").trim();
+    if (!/^\d{4}$/.test(normalizedDeliveryOTP)) {
+      return res.status(400).json({ message: "A valid 4-digit delivery OTP is required" });
+    }
+
+    const order = await orderModel.findById(orderId).select("+deliveryOTP");
+    if (!order) {
+      return res.status(404).json({ message: "Order not found" });
+    }
+
+    if (order.status !== ORDER_STATUS.OUT_FOR_DELIVERY) {
+      return res.status(409).json({
+        message: `Order cannot be verified in ${order.status} status`,
+      });
+    }
+
+    if (!order.partnerId || String(order.partnerId) !== String(partnerId)) {
+      return res.status(403).json({ message: "Only the assigned partner can verify this order" });
+    }
+
+    if (order.isVerified) {
+      return res.status(409).json({ message: "Order is already verified" });
+    }
+
+    if (String(order.deliveryOTP || "") !== normalizedDeliveryOTP) {
+      return res.status(400).json({ message: "Invalid delivery OTP" });
+    }
+
+    const deliveryCompletionUpdates = {
+      status: ORDER_STATUS.DELIVERED,
+      isVerified: true,
+      deliveryOTP: null,
+      deliveredAt: new Date(),
+      actualDelivery: new Date(),
+    };
+
+    if (proofOfDeliveryImage) {
+      deliveryCompletionUpdates.proofOfDeliveryImage = proofOfDeliveryImage;
+    }
+
+    const updatedOrder = await orderModel
+      .findByIdAndUpdate(orderId, deliveryCompletionUpdates, { new: true })
+      .populate("partnerId", "name phone vehicle")
+      .populate("storeId", "storeName address city phone");
+
+    await syncPartnerAvailability(partnerId);
+    emitOrderStatus(updatedOrder);
+
+    return res.status(200).json({
+      message: "Order verified and delivered successfully",
+      order: updatedOrder,
+      lifecycle: STATUS_FLOW,
+    });
+  } catch (error) {
+    return res.status(500).json({ message: error.message });
   }
 };
 
@@ -486,6 +577,8 @@ export const claimPartnerJob = async (req, res) => {
       });
     }
 
+    const generatedDeliveryOTP = generateDeliveryOTP();
+
     const updatedOrder = await orderModel
       .findByIdAndUpdate(
         orderId,
@@ -493,6 +586,8 @@ export const claimPartnerJob = async (req, res) => {
           partnerId,
           status: ORDER_STATUS.PARTNER_ASSIGNED,
           shippedAt: new Date(),
+          deliveryOTP: generatedDeliveryOTP,
+          isVerified: false,
         },
         { new: true },
       )
@@ -500,6 +595,7 @@ export const claimPartnerJob = async (req, res) => {
       .populate("storeId", "storeName address city phone");
 
     await syncPartnerAvailability(partnerId);
+    emitDeliveryOTPToUser(updatedOrder, generatedDeliveryOTP);
     emitOrderStatus(updatedOrder);
 
     return res.status(200).json({

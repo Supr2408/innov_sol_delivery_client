@@ -1,7 +1,7 @@
 import React, { useContext, useEffect, useMemo, useState } from "react";
 import axios from "axios";
 import { toast } from "react-toastify";
-import { AppContext } from "../../context/AppContext";
+import { AppContext } from "../../context/appContext";
 
 const AdminDashboard = () => {
   const { user } = useContext(AppContext);
@@ -23,7 +23,7 @@ const AdminDashboard = () => {
         setStores(storesRes.data.stores || []);
         setItems(itemsRes.data.items || []);
         setCategories(categoriesRes.data.categories || []);
-      } catch (error) {
+      } catch {
         toast.error("Failed to load admin overview");
       } finally {
         setLoading(false);

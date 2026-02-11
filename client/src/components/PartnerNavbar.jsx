@@ -1,5 +1,5 @@
 import { useContext, useState } from "react";
-import { AppContext } from "../context/AppContext";
+import { AppContext } from "../context/appContext";
 import { useNavigate } from "react-router-dom";
 
 const PartnerNavbar = () => {

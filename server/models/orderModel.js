@@ -47,6 +47,17 @@ const orderSchema = new mongoose.Schema(
       default: "pending",
     },
 
+    deliveryOTP: {
+      type: String,
+      default: null,
+      select: false,
+    },
+
+    isVerified: {
+      type: Boolean,
+      default: false,
+    },
+
     deliveryAddress: {
       type: String,
       required: true,
@@ -78,6 +89,10 @@ const orderSchema = new mongoose.Schema(
   },
   { timestamps: true }
 );
+
+orderSchema.index({ partnerId: 1 });
+orderSchema.index({ clientId: 1 });
+orderSchema.index({ storeId: 1 });
 
 const orderModel = mongoose.models.order || mongoose.model("order", orderSchema);
 
