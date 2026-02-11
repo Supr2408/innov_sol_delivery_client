@@ -67,3 +67,19 @@ export const loginPartner = async (req, res) => {
     res.status(500).json({ message: error.message });
   }
 };
+
+export const getAllPartners = async (req, res) => {
+  try {
+    const partners = await partnerModel
+      .find()
+      .select("_id name email phone vehicle isAvailable")
+      .sort({ createdAt: -1 });
+
+    res.status(200).json({
+      message: "Partners retrieved successfully",
+      partners,
+    });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
