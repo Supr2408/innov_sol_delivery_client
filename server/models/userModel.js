@@ -22,6 +22,23 @@ const userSchema = new mongoose.Schema(
       type: String,
       default: "user",
     },
+
+    deviceTokens: [
+      {
+        token: {
+          type: String,
+          required: true,
+        },
+        platform: {
+          type: String,
+          default: "web",
+        },
+        updatedAt: {
+          type: Date,
+          default: Date.now,
+        },
+      },
+    ],
   },
   { timestamps: true }
 );

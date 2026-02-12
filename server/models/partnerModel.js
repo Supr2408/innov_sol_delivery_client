@@ -38,9 +38,27 @@ const partnerSchema = new mongoose.Schema(
       type: Boolean,
       default: true,
     },
+
+    location: {
+      type: {
+        type: String,
+        enum: ["Point"],
+        default: "Point",
+      },
+      coordinates: {
+        type: [Number],
+        default: undefined,
+      },
+      updatedAt: {
+        type: Date,
+        default: null,
+      },
+    },
   },
   { timestamps: true }
 );
+
+partnerSchema.index({ location: "2dsphere" });
 
 const partnerModel = mongoose.models.partner || mongoose.model("partner", partnerSchema);
 

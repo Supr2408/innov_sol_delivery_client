@@ -36,6 +36,21 @@ const orderSchema = new mongoose.Schema(
       },
     ],
 
+    baseSubtotal: {
+      type: Number,
+      default: 0,
+    },
+
+    deliveryFee: {
+      type: Number,
+      default: 0,
+    },
+
+    platformFee: {
+      type: Number,
+      default: 0,
+    },
+
     totalAmount: {
       type: Number,
       required: true,
@@ -67,6 +82,11 @@ const orderSchema = new mongoose.Schema(
       lng: Number,
       label: String,
     },
+    storeLocation: {
+      lat: Number,
+      lng: Number,
+      label: String,
+    },
     partnerCurrentLocation: {
       lat: Number,
       lng: Number,
@@ -86,6 +106,18 @@ const orderSchema = new mongoose.Schema(
     shippedAt: Date,
     deliveredAt: Date,
     proofOfDeliveryImage: String,
+    isWalletCredited: {
+      type: Boolean,
+      default: false,
+    },
+    storeWalletCreditAmount: {
+      type: Number,
+      default: 0,
+    },
+    partnerWalletCreditAmount: {
+      type: Number,
+      default: 0,
+    },
   },
   { timestamps: true }
 );

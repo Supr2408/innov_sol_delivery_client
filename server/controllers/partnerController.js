@@ -4,7 +4,7 @@ import jwt from "jsonwebtoken";
 
 export const registerPartner = async (req, res) => {
   try {
-    const { name, email, password, phone, vehicle } = req.body;
+    const { name, email, password, phone, vehicle, location } = req.body;
     // validation
     if (!name || !email || !password || !phone || !vehicle) {
       return res.status(400).json({ message: "Please fill all the fields" });
@@ -17,12 +17,22 @@ export const registerPartner = async (req, res) => {
 
     const saltedPassword = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(password, saltedPassword);
+    const hasLocation =
+      Number.isFinite(Number(location?.lat)) && Number.isFinite(Number(location?.lng));
+
     const newPartner = new partnerModel({
       name,
       email,
       password: hashedPassword,
       phone,
       vehicle,
+      location: hasLocation
+        ? {
+            type: "Point",
+            coordinates: [Number(location.lng), Number(location.lat)],
+            updatedAt: new Date(),
+          }
+        : undefined,
     });
     await newPartner.save();
     res.status(201).json({ message: "Partner registered successfully" });
@@ -60,6 +70,14 @@ export const loginPartner = async (req, res) => {
         email: existingPartner.email,
         phone: existingPartner.phone,
         vehicle: existingPartner.vehicle,
+        location:
+          Array.isArray(existingPartner.location?.coordinates) &&
+          existingPartner.location.coordinates.length === 2
+            ? {
+                lat: Number(existingPartner.location.coordinates[1]),
+                lng: Number(existingPartner.location.coordinates[0]),
+              }
+            : null,
         role: "partner",
       },
     });
@@ -72,7 +90,7 @@ export const getAllPartners = async (req, res) => {
   try {
     const partners = await partnerModel
       .find()
-      .select("_id name email phone vehicle isAvailable")
+      .select("_id name email phone vehicle isAvailable location")
       .sort({ createdAt: -1 });
 
     res.status(200).json({

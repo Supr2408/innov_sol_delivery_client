@@ -1,5 +1,10 @@
+import mongoose from "mongoose";
 import orderModel from "../models/orderModel.js";
 import partnerModel from "../models/partnerModel.js";
+import storeModel from "../models/storeModel.js";
+import userModel from "../models/userModel.js";
+import walletModel from "../models/walletModel.js";
+import { sendPushToDeviceTokens } from "../services/fcmService.js";
 import { getIO } from "../socket.js";
 
 const ORDER_STATUS = {
@@ -19,13 +24,135 @@ const STATUS_FLOW = [
   ORDER_STATUS.DELIVERED,
 ];
 
+const BASE_DELIVERY_FEE = Number(process.env.BASE_DELIVERY_FEE || 2.49);
+const DELIVERY_FEE_PER_KM = Number(process.env.DELIVERY_FEE_PER_KM || 0.75);
+const PLATFORM_FEE_RATE = Number(process.env.PLATFORM_FEE_RATE || 0.05);
+const STORE_EARNING_SHARE = Number(process.env.STORE_EARNING_SHARE || 0.8);
+
+const roundCurrency = (value) => Math.round((Number(value) || 0) * 100) / 100;
+const toFiniteNumber = (value, fallback = 0) => {
+  const numericValue = Number(value);
+  return Number.isFinite(numericValue) ? numericValue : fallback;
+};
+
+const buildHttpError = (status, message) => {
+  const error = new Error(message);
+  error.status = status;
+  return error;
+};
+
+const toLocation = (point) => {
+  const lat = Number(point?.lat);
+  const lng = Number(point?.lng);
+
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+    return null;
+  }
+
+  return {
+    lat,
+    lng,
+    label: point?.label || "",
+  };
+};
+
+const toGeoPoint = (location) => {
+  if (!location) return null;
+  const lat = Number(location.lat);
+  const lng = Number(location.lng);
+
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+    return null;
+  }
+
+  return {
+    type: "Point",
+    coordinates: [lng, lat],
+  };
+};
+
+const resolveEntityId = (entity) => {
+  if (!entity) return "";
+  if (typeof entity === "string") return entity;
+  if (entity?._id) return String(entity._id);
+  return String(entity);
+};
+
+const isSocketRoomActive = (io, roomName) => {
+  if (!io?.sockets?.adapter?.rooms?.get || !roomName) return false;
+  const room = io.sockets.adapter.rooms.get(roomName);
+  return Boolean(room && room.size > 0);
+};
+
+const calculateDistanceKm = (startPoint, endPoint) => {
+  if (!startPoint || !endPoint) return 0;
+
+  const earthRadiusKm = 6371;
+  const radians = Math.PI / 180;
+  const latitudeDelta = (endPoint.lat - startPoint.lat) * radians;
+  const longitudeDelta = (endPoint.lng - startPoint.lng) * radians;
+  const startLatitudeInRadians = startPoint.lat * radians;
+  const endLatitudeInRadians = endPoint.lat * radians;
+  const haversineComponent =
+    Math.sin(latitudeDelta / 2) ** 2 +
+    Math.cos(startLatitudeInRadians) *
+      Math.cos(endLatitudeInRadians) *
+      Math.sin(longitudeDelta / 2) ** 2;
+
+  return earthRadiusKm * 2 * Math.atan2(Math.sqrt(haversineComponent), Math.sqrt(1 - haversineComponent));
+};
+
+const calculateDeliveryFee = (distanceKm, hasDistance) => {
+  if (!hasDistance) {
+    return roundCurrency(BASE_DELIVERY_FEE);
+  }
+
+  return roundCurrency(BASE_DELIVERY_FEE + Math.max(0, distanceKm) * DELIVERY_FEE_PER_KM);
+};
+
+const calculatePlatformFee = (baseSubtotal) =>
+  roundCurrency(Math.max(0, toFiniteNumber(baseSubtotal)) * PLATFORM_FEE_RATE);
+
 const generateDeliveryOTP = () => `${Math.floor(1000 + Math.random() * 9000)}`;
 
+const extractStoreLocationFromStoreDoc = (store) => {
+  const coordinates = Array.isArray(store?.location?.coordinates)
+    ? store.location.coordinates
+    : [];
+
+  if (coordinates.length === 2) {
+    return {
+      lat: Number(coordinates[1]),
+      lng: Number(coordinates[0]),
+      label: store?.address || store?.storeName || "Store",
+    };
+  }
+
+  return null;
+};
+
+const extractStoreLocationFromOrder = (order) => {
+  const populatedStoreCoordinates = Array.isArray(order?.storeId?.location?.coordinates)
+    ? order.storeId.location.coordinates
+    : [];
+
+  if (populatedStoreCoordinates.length === 2) {
+    return {
+      lat: Number(populatedStoreCoordinates[1]),
+      lng: Number(populatedStoreCoordinates[0]),
+      label: order?.storeId?.address || order?.storeId?.storeName || "Store",
+    };
+  }
+
+  return toLocation(order?.storeLocation);
+};
+
 const emitDeliveryOTPToUser = (order, deliveryOTP) => {
-  if (!order?.clientId || !deliveryOTP) return;
+  const clientId = resolveEntityId(order?.clientId);
+  if (!clientId || !deliveryOTP) return;
 
   const io = getIO();
-  io.to(`user:${order.clientId}`).emit("order:user:delivery-otp", {
+  io.to(`user:${clientId}`).emit("order:user:delivery-otp", {
     orderId: order._id,
     deliveryOTP,
   });
@@ -57,55 +184,131 @@ const isValidStatusTransition = (currentStatus, nextStatus) => {
   return nextIndex === currentIndex + 1;
 };
 
-const emitOrderStatus = (order) => {
+const emitOrderStatus = async (order) => {
   const io = getIO();
 
-  io.to(`store:${order.storeId}`).emit("order:store:updated", {
-    orderId: order._id,
-    status: order.status,
-    order,
-  });
+  const storeId = resolveEntityId(order?.storeId);
+  const clientId = resolveEntityId(order?.clientId);
+  const partnerId = resolveEntityId(order?.partnerId);
 
-  io.to(`user:${order.clientId}`).emit("order:user:tracking", {
-    orderId: order._id,
-    status: order.status,
-    progressFlow: STATUS_FLOW,
-    order,
-  });
-
-  if (order.partnerId) {
-    io.to(`partner:${order.partnerId}`).emit("order:partner:updated", {
+  if (storeId) {
+    io.to(`store:${storeId}`).emit("order:store:updated", {
       orderId: order._id,
       status: order.status,
       order,
     });
   }
+
+  if (clientId) {
+    io.to(`user:${clientId}`).emit("order:user:tracking", {
+      orderId: order._id,
+      status: order.status,
+      progressFlow: STATUS_FLOW,
+      order,
+    });
+  }
+
+  if (partnerId) {
+    io.to(`partner:${partnerId}`).emit("order:partner:updated", {
+      orderId: order._id,
+      status: order.status,
+      order,
+    });
+  }
+
+  if (clientId && !isSocketRoomActive(io, `user:${clientId}`)) {
+    const user = await userModel.findById(clientId).select("deviceTokens");
+    const deviceTokens = (user?.deviceTokens || [])
+      .map((entry) => entry?.token)
+      .filter(Boolean);
+
+    await sendPushToDeviceTokens(deviceTokens, {
+      title: "Order status updated",
+      body: `Your order ${order.orderId || ""} is now ${order.status}`.trim(),
+      data: {
+        orderId: order._id,
+        status: order.status,
+        event: "order:status:updated",
+      },
+    });
+  }
 };
 
-const emitPartnerJobPoolAlert = (order, radiusInKm = 10) => {
+const emitPartnerJobPoolAlert = async (order, radiusInKm = 10) => {
   const io = getIO();
+  const storeLocation = extractStoreLocationFromOrder(order);
   const storeName =
     typeof order.storeId === "object" && order.storeId?.storeName
       ? order.storeId.storeName
-      : order.storeId;
+      : order.storeLocation?.label || "Store";
 
-  io.to("partners:pool").emit("partner:job:new", {
+  const radiusInMeters = Math.max(1, Number(radiusInKm || 10)) * 1000;
+  const storeGeoPoint = toGeoPoint(storeLocation);
+
+  if (!storeGeoPoint) {
+    return;
+  }
+
+  const nearbyPartners = await partnerModel
+    .find({
+      isAvailable: true,
+      location: {
+        $near: {
+          $geometry: storeGeoPoint,
+          $maxDistance: radiusInMeters,
+        },
+      },
+    })
+    .select("_id");
+
+  if (!nearbyPartners.length) {
+    return;
+  }
+
+  const payload = {
     title: "New Delivery Available",
     message: `Pickup from ${storeName} within ${radiusInKm}km radius`,
     order,
     radiusInKm,
+  };
+
+  nearbyPartners.forEach((partner) => {
+    io.to(`partner:${partner._id}`).emit("partner:job:new", payload);
   });
 };
 
-const autoAssignPartner = async () => {
-  const availablePartners = await partnerModel.find({ isAvailable: true }).select("_id");
+const creditWallet = async ({ walletType, partnerId, storeId, creditAmount, creditedAt, session }) => {
+  const amount = roundCurrency(creditAmount);
+  if (amount <= 0) return null;
 
-  if (!availablePartners.length) {
-    return null;
-  }
+  const dateKey = new Date(creditedAt).toISOString().slice(0, 10);
+  const filter =
+    walletType === "partner"
+      ? { walletType: "partner", partnerId }
+      : { walletType: "store", storeId };
 
-  const randomIndex = Math.floor(Math.random() * availablePartners.length);
-  return availablePartners[randomIndex]._id;
+  const update = {
+    $inc: {
+      totalBalance: amount,
+      totalEarned: amount,
+      [`dailyEarnings.${dateKey}`]: amount,
+    },
+    $set: {
+      lastCreditedAt: creditedAt,
+    },
+    $setOnInsert: {
+      walletType,
+      partnerId: walletType === "partner" ? partnerId : null,
+      storeId: walletType === "store" ? storeId : null,
+    },
+  };
+
+  return walletModel.findOneAndUpdate(filter, update, {
+    upsert: true,
+    new: true,
+    setDefaultsOnInsert: true,
+    session,
+  });
 };
 
 // Get all orders for a store
@@ -116,7 +319,8 @@ export const getStoreOrders = async (req, res) => {
     const orders = await orderModel
       .find({ storeId })
       .sort({ createdAt: -1 })
-      .populate("partnerId", "name phone vehicle");
+      .populate("partnerId", "name phone vehicle")
+      .populate("storeId", "storeName address city phone location");
 
     res.status(200).json({
       message: "Orders retrieved successfully",
@@ -132,7 +336,10 @@ export const getOrdersByStatus = async (req, res) => {
   try {
     const { storeId, status } = req.params;
 
-    const orders = await orderModel.find({ storeId, status }).sort({ createdAt: -1 });
+    const orders = await orderModel
+      .find({ storeId, status })
+      .sort({ createdAt: -1 })
+      .populate("storeId", "storeName address city phone location");
 
     res.status(200).json({
       message: `${status} orders retrieved successfully`,
@@ -285,10 +492,10 @@ export const updateOrderStatus = async (req, res) => {
     const updatedOrder = await orderModel
       .findByIdAndUpdate(orderId, updates, { new: true })
       .populate("partnerId", "name phone vehicle")
-      .populate("storeId", "storeName address city phone");
+      .populate("storeId", "storeName address city phone location");
 
     if (normalizedStatus === ORDER_STATUS.PREPARING) {
-      emitPartnerJobPoolAlert(updatedOrder, 8);
+      await emitPartnerJobPoolAlert(updatedOrder, 10);
     }
 
     if (normalizedStatus === ORDER_STATUS.PARTNER_ASSIGNED) {
@@ -306,7 +513,7 @@ export const updateOrderStatus = async (req, res) => {
       await syncPartnerAvailability(updatedOrder.partnerId._id);
     }
 
-    emitOrderStatus(updatedOrder);
+    await emitOrderStatus(updatedOrder);
 
     return res.status(200).json({
       message: "Order status updated successfully",
@@ -326,7 +533,6 @@ export const createOrder = async (req, res) => {
       storeId: bodyStoreId,
       clientId,
       items,
-      totalAmount,
       deliveryAddress,
       customerLocation,
       clientName,
@@ -335,27 +541,80 @@ export const createOrder = async (req, res) => {
 
     const storeId = bodyStoreId || routeStoreId;
 
-    const orderId = `ORD-${Date.now()}-${Math.random().toString(36).slice(2, 9).toUpperCase()}`;
+    if (!storeId || !clientId) {
+      return res.status(400).json({ message: "storeId and clientId are required" });
+    }
 
-    const sanitizedCustomerLocation =
-      customerLocation &&
-      Number.isFinite(Number(customerLocation.lat)) &&
-      Number.isFinite(Number(customerLocation.lng))
-        ? {
-            lat: Number(customerLocation.lat),
-            lng: Number(customerLocation.lng),
-            label: customerLocation.label || deliveryAddress,
-          }
-        : undefined;
+    if (!Array.isArray(items) || !items.length) {
+      return res.status(400).json({ message: "At least one item is required" });
+    }
+
+    if (!String(deliveryAddress || "").trim()) {
+      return res.status(400).json({ message: "deliveryAddress is required" });
+    }
+
+    const store = await storeModel
+      .findById(storeId)
+      .select("_id storeName address city phone location");
+
+    if (!store) {
+      return res.status(404).json({ message: "Store not found" });
+    }
+
+    const sanitizedItems = items
+      .map((item) => {
+        const quantity = Math.max(0, toFiniteNumber(item.quantity));
+        const price = Math.max(0, toFiniteNumber(item.price));
+        const subtotal = roundCurrency(quantity * price);
+
+        return {
+          itemId: item.itemId,
+          itemName: item.itemName,
+          quantity,
+          price,
+          subtotal,
+        };
+      })
+      .filter((item) => item.quantity > 0);
+
+    if (!sanitizedItems.length) {
+      return res.status(400).json({ message: "Items must include valid quantity and price" });
+    }
+
+    const baseSubtotal = roundCurrency(
+      sanitizedItems.reduce((sum, item) => sum + roundCurrency(item.subtotal), 0),
+    );
+
+    const sanitizedCustomerLocation = toLocation({
+      lat: customerLocation?.lat,
+      lng: customerLocation?.lng,
+      label: customerLocation?.label || deliveryAddress,
+    });
+    const storeLocation = extractStoreLocationFromStoreDoc(store);
+
+    const hasDistanceInputs = Boolean(sanitizedCustomerLocation && storeLocation);
+    const distanceKm = hasDistanceInputs
+      ? calculateDistanceKm(storeLocation, sanitizedCustomerLocation)
+      : 0;
+
+    const deliveryFee = calculateDeliveryFee(distanceKm, hasDistanceInputs);
+    const platformFee = calculatePlatformFee(baseSubtotal);
+    const totalAmount = roundCurrency(baseSubtotal + deliveryFee + platformFee);
+
+    const orderId = `ORD-${Date.now()}-${Math.random().toString(36).slice(2, 9).toUpperCase()}`;
 
     const newOrder = await orderModel.create({
       orderId,
       storeId,
       clientId,
-      items,
+      items: sanitizedItems,
+      baseSubtotal,
+      deliveryFee,
+      platformFee,
       totalAmount,
       deliveryAddress,
-      customerLocation: sanitizedCustomerLocation,
+      customerLocation: sanitizedCustomerLocation || undefined,
+      storeLocation: storeLocation || undefined,
       clientName,
       clientPhone,
       status: ORDER_STATUS.RECEIVED,
@@ -380,6 +639,13 @@ export const createOrder = async (req, res) => {
       message: "Order created successfully",
       order: newOrder,
       lifecycle: STATUS_FLOW,
+      pricing: {
+        baseSubtotal,
+        deliveryFee,
+        platformFee,
+        totalAmount,
+        distanceKm: roundCurrency(distanceKm),
+      },
     });
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -394,7 +660,8 @@ export const getUserOrders = async (req, res) => {
     const orders = await orderModel
       .find({ clientId: userId })
       .sort({ createdAt: -1 })
-      .populate("partnerId", "name phone vehicle");
+      .populate("partnerId", "name phone vehicle")
+      .populate("storeId", "storeName address city phone location");
 
     res.status(200).json({
       message: "User orders retrieved successfully",
@@ -425,7 +692,8 @@ export const getUserTracking = async (req, res) => {
       })
       .select("+deliveryOTP")
       .sort({ createdAt: -1 })
-      .populate("partnerId", "name phone vehicle");
+      .populate("partnerId", "name phone vehicle")
+      .populate("storeId", "storeName address city phone location");
 
     res.status(200).json({
       message: "User tracking info retrieved",
@@ -438,9 +706,11 @@ export const getUserTracking = async (req, res) => {
 };
 
 export const verifyAndCompleteOrder = async (req, res) => {
+  const session = await mongoose.startSession();
+
   try {
     const { orderId } = req.params;
-    const { partnerId, deliveryOTP, proofOfDeliveryImage } = req.body;
+    const { partnerId, deliveryOTP } = req.body;
 
     if (!partnerId) {
       return res.status(400).json({ message: "partnerId is required" });
@@ -451,48 +721,85 @@ export const verifyAndCompleteOrder = async (req, res) => {
       return res.status(400).json({ message: "A valid 4-digit delivery OTP is required" });
     }
 
-    const order = await orderModel.findById(orderId).select("+deliveryOTP");
-    if (!order) {
-      return res.status(404).json({ message: "Order not found" });
-    }
-
-    if (order.status !== ORDER_STATUS.OUT_FOR_DELIVERY) {
-      return res.status(409).json({
-        message: `Order cannot be verified in ${order.status} status`,
+    if (!req.file || !req.file.filename) {
+      return res.status(400).json({
+        message: "proofOfDeliveryImage file is required",
       });
     }
+    const proofOfDeliveryImagePath = `/uploads/${req.file.filename}`;
 
-    if (!order.partnerId || String(order.partnerId) !== String(partnerId)) {
-      return res.status(403).json({ message: "Only the assigned partner can verify this order" });
-    }
+    await session.withTransaction(async () => {
+      const order = await orderModel.findById(orderId).select("+deliveryOTP").session(session);
+      if (!order) {
+        throw buildHttpError(404, "Order not found");
+      }
 
-    if (order.isVerified) {
-      return res.status(409).json({ message: "Order is already verified" });
-    }
+      if (order.status !== ORDER_STATUS.OUT_FOR_DELIVERY) {
+        throw buildHttpError(409, `Order cannot be verified in ${order.status} status`);
+      }
 
-    if (String(order.deliveryOTP || "") !== normalizedDeliveryOTP) {
-      return res.status(400).json({ message: "Invalid delivery OTP" });
-    }
+      if (!order.partnerId || String(order.partnerId) !== String(partnerId)) {
+        throw buildHttpError(403, "Only the assigned partner can verify this order");
+      }
 
-    const deliveryCompletionUpdates = {
-      status: ORDER_STATUS.DELIVERED,
-      isVerified: true,
-      deliveryOTP: null,
-      deliveredAt: new Date(),
-      actualDelivery: new Date(),
-    };
+      if (order.isVerified) {
+        throw buildHttpError(409, "Order is already verified");
+      }
 
-    if (proofOfDeliveryImage) {
-      deliveryCompletionUpdates.proofOfDeliveryImage = proofOfDeliveryImage;
-    }
+      if (order.isWalletCredited) {
+        throw buildHttpError(409, "Order wallet settlement is already completed");
+      }
+
+      if (String(order.deliveryOTP || "") !== normalizedDeliveryOTP) {
+        throw buildHttpError(400, "Invalid delivery OTP");
+      }
+
+      const deliveredAt = new Date();
+      const storeWalletCreditAmount = roundCurrency(
+        toFiniteNumber(order.totalAmount) * STORE_EARNING_SHARE,
+      );
+      const partnerWalletCreditAmount = roundCurrency(toFiniteNumber(order.deliveryFee));
+
+      await creditWallet({
+        walletType: "store",
+        storeId: order.storeId,
+        creditAmount: storeWalletCreditAmount,
+        creditedAt: deliveredAt,
+        session,
+      });
+
+      await creditWallet({
+        walletType: "partner",
+        partnerId: order.partnerId,
+        creditAmount: partnerWalletCreditAmount,
+        creditedAt: deliveredAt,
+        session,
+      });
+
+      await orderModel.findByIdAndUpdate(
+        orderId,
+        {
+          status: ORDER_STATUS.DELIVERED,
+          isVerified: true,
+          deliveryOTP: null,
+          deliveredAt,
+          actualDelivery: deliveredAt,
+          proofOfDeliveryImage: proofOfDeliveryImagePath,
+          isWalletCredited: true,
+          storeWalletCreditAmount,
+          partnerWalletCreditAmount,
+        },
+        { new: true, session },
+      );
+    });
 
     const updatedOrder = await orderModel
-      .findByIdAndUpdate(orderId, deliveryCompletionUpdates, { new: true })
+      .findById(orderId)
       .populate("partnerId", "name phone vehicle")
-      .populate("storeId", "storeName address city phone");
+      .populate("storeId", "storeName address city phone location");
 
     await syncPartnerAvailability(partnerId);
-    emitOrderStatus(updatedOrder);
+    await emitOrderStatus(updatedOrder);
 
     return res.status(200).json({
       message: "Order verified and delivered successfully",
@@ -500,7 +807,9 @@ export const verifyAndCompleteOrder = async (req, res) => {
       lifecycle: STATUS_FLOW,
     });
   } catch (error) {
-    return res.status(500).json({ message: error.message });
+    return res.status(error.status || 500).json({ message: error.message });
+  } finally {
+    await session.endSession();
   }
 };
 
@@ -512,7 +821,7 @@ export const getPartnerOrders = async (req, res) => {
     const orders = await orderModel
       .find({ partnerId })
       .sort({ createdAt: -1 })
-      .populate("storeId", "storeName phone address city");
+      .populate("storeId", "storeName phone address city location");
 
     res.status(200).json({
       message: "Partner orders retrieved successfully",
@@ -532,7 +841,7 @@ export const getOpenPartnerJobs = async (req, res) => {
         partnerId: null,
       })
       .sort({ createdAt: -1 })
-      .populate("storeId", "storeName phone address city");
+      .populate("storeId", "storeName phone address city location");
 
     res.status(200).json({
       message: "Open jobs retrieved successfully",
@@ -592,11 +901,11 @@ export const claimPartnerJob = async (req, res) => {
         { new: true },
       )
       .populate("partnerId", "name phone vehicle")
-      .populate("storeId", "storeName address city phone");
+      .populate("storeId", "storeName address city phone location");
 
     await syncPartnerAvailability(partnerId);
     emitDeliveryOTPToUser(updatedOrder, generatedDeliveryOTP);
-    emitOrderStatus(updatedOrder);
+    await emitOrderStatus(updatedOrder);
 
     return res.status(200).json({
       message: "Job claimed successfully",
