@@ -711,6 +711,7 @@ export const verifyAndCompleteOrder = async (req, res) => {
   try {
     const { orderId } = req.params;
     const { partnerId, deliveryOTP } = req.body;
+    const proofOfDeliveryImagePath = req.file?.filename ? `/uploads/${req.file.filename}` : "";
 
     if (!partnerId) {
       return res.status(400).json({ message: "partnerId is required" });
@@ -720,13 +721,6 @@ export const verifyAndCompleteOrder = async (req, res) => {
     if (!/^\d{4}$/.test(normalizedDeliveryOTP)) {
       return res.status(400).json({ message: "A valid 4-digit delivery OTP is required" });
     }
-
-    if (!req.file || !req.file.filename) {
-      return res.status(400).json({
-        message: "proofOfDeliveryImage file is required",
-      });
-    }
-    const proofOfDeliveryImagePath = `/uploads/${req.file.filename}`;
 
     await session.withTransaction(async () => {
       const order = await orderModel.findById(orderId).select("+deliveryOTP").session(session);
@@ -776,21 +770,22 @@ export const verifyAndCompleteOrder = async (req, res) => {
         session,
       });
 
-      await orderModel.findByIdAndUpdate(
-        orderId,
-        {
-          status: ORDER_STATUS.DELIVERED,
-          isVerified: true,
-          deliveryOTP: null,
-          deliveredAt,
-          actualDelivery: deliveredAt,
-          proofOfDeliveryImage: proofOfDeliveryImagePath,
-          isWalletCredited: true,
-          storeWalletCreditAmount,
-          partnerWalletCreditAmount,
-        },
-        { new: true, session },
-      );
+      const deliveryCompletionUpdates = {
+        status: ORDER_STATUS.DELIVERED,
+        isVerified: true,
+        deliveryOTP: null,
+        deliveredAt,
+        actualDelivery: deliveredAt,
+        isWalletCredited: true,
+        storeWalletCreditAmount,
+        partnerWalletCreditAmount,
+      };
+
+      if (proofOfDeliveryImagePath) {
+        deliveryCompletionUpdates.proofOfDeliveryImage = proofOfDeliveryImagePath;
+      }
+
+      await orderModel.findByIdAndUpdate(orderId, deliveryCompletionUpdates, { new: true, session });
     });
 
     const updatedOrder = await orderModel
