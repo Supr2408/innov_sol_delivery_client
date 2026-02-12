@@ -3,8 +3,14 @@ import axios from "axios";
 import { toast } from "react-toastify";
 import { AppContext } from "./appContext";
 
+const resolveBackendApiUrl = (configuredUrl) => {
+  const normalizedUrl = String(configuredUrl || "").trim().replace(/\/+$/, "");
+  if (!normalizedUrl) return "";
+  return normalizedUrl.endsWith("/api") ? normalizedUrl : `${normalizedUrl}/api`;
+};
+
 const AppContextProvider = (props) => {
-  const backendUrl = import.meta.env.VITE_BACKEND_URL;
+  const backendUrl = resolveBackendApiUrl(import.meta.env.VITE_BACKEND_URL);
 
   const [token, setToken] = useState(localStorage.getItem("token"));
   const [user, setUser] = useState(
@@ -28,7 +34,12 @@ const AppContextProvider = (props) => {
   }, []);
 
   useEffect(() => {
-    axios.defaults.baseURL = backendUrl;
+    if (backendUrl) {
+      axios.defaults.baseURL = backendUrl;
+    } else {
+      delete axios.defaults.baseURL;
+      console.warn("VITE_BACKEND_URL is not configured. API calls will use current origin.");
+    }
 
     if (token) {
       axios.defaults.headers.common.Authorization = `Bearer ${token}`;
