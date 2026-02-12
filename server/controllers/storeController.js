@@ -4,7 +4,7 @@ import jwt from "jsonwebtoken";
 
 export const registerStore = async (req, res) => {
   try {
-    const { storeName, email, password, phone, address, city } = req.body;
+    const { storeName, email, password, phone, address, city, location } = req.body;
     // validation
     if (!storeName || !email || !password || !phone || !address || !city) {
       return res.status(400).json({ message: "Please fill all the fields" });
@@ -17,6 +17,9 @@ export const registerStore = async (req, res) => {
 
     const saltedPassword = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(password, saltedPassword);
+    const hasLocation =
+      Number.isFinite(Number(location?.lat)) && Number.isFinite(Number(location?.lng));
+
     const newStore = new storeModel({
       storeName,
       email,
@@ -24,6 +27,12 @@ export const registerStore = async (req, res) => {
       phone,
       address,
       city,
+      location: hasLocation
+        ? {
+            type: "Point",
+            coordinates: [Number(location.lng), Number(location.lat)],
+          }
+        : undefined,
     });
     await newStore.save();
     res.status(201).json({ message: "Store registered successfully" });
@@ -62,6 +71,14 @@ export const loginStore = async (req, res) => {
         phone: existingStore.phone,
         city: existingStore.city,
         address: existingStore.address,
+        location:
+          Array.isArray(existingStore.location?.coordinates) &&
+          existingStore.location.coordinates.length === 2
+            ? {
+                lat: Number(existingStore.location.coordinates[1]),
+                lng: Number(existingStore.location.coordinates[0]),
+              }
+            : null,
         role: "store",
       },
     });
@@ -70,10 +87,72 @@ export const loginStore = async (req, res) => {
   }
 };
 
+export const updateStoreLocation = async (req, res) => {
+  try {
+    const { storeId } = req.params;
+    const { location, address, city } = req.body;
+
+    if (!storeId) {
+      return res.status(400).json({ message: "storeId is required" });
+    }
+
+    const lat = Number(location?.lat);
+    const lng = Number(location?.lng);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+      return res.status(400).json({ message: "Valid location coordinates are required" });
+    }
+
+    const updates = {
+      location: {
+        type: "Point",
+        coordinates: [lng, lat],
+      },
+    };
+
+    if (typeof address === "string" && address.trim()) {
+      updates.address = address.trim();
+    }
+
+    if (typeof city === "string" && city.trim()) {
+      updates.city = city.trim();
+    }
+
+    const updatedStore = await storeModel.findByIdAndUpdate(storeId, updates, { new: true });
+    if (!updatedStore) {
+      return res.status(404).json({ message: "Store not found" });
+    }
+
+    return res.status(200).json({
+      message: "Store location updated successfully",
+      store: {
+        id: updatedStore._id,
+        storeName: updatedStore.storeName,
+        email: updatedStore.email,
+        phone: updatedStore.phone,
+        city: updatedStore.city,
+        address: updatedStore.address,
+        location:
+          Array.isArray(updatedStore.location?.coordinates) &&
+          updatedStore.location.coordinates.length === 2
+            ? {
+                lat: Number(updatedStore.location.coordinates[1]),
+                lng: Number(updatedStore.location.coordinates[0]),
+              }
+            : null,
+        role: "store",
+      },
+    });
+  } catch (error) {
+    return res.status(500).json({ message: error.message });
+  }
+};
+
 // Get all stores
 export const getAllStores = async (req, res) => {
   try {
-    const stores = await storeModel.find().select("_id storeName email phone city address");
+    const stores = await storeModel
+      .find()
+      .select("_id storeName email phone city address location");
     res.status(200).json({
       message: "Stores retrieved successfully",
       stores,

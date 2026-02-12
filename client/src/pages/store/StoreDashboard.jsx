@@ -82,6 +82,16 @@ const resolveSocketServerUrl = () => {
   }
 };
 
+const resolveBackendAssetUrl = (assetPath) => {
+  const normalizedAssetPath = String(assetPath || "").trim();
+  if (!normalizedAssetPath) return "";
+  if (/^https?:\/\//i.test(normalizedAssetPath)) return normalizedAssetPath;
+
+  const backendOrigin = resolveSocketServerUrl();
+  const normalizedSuffix = normalizedAssetPath.startsWith("/") ? normalizedAssetPath : `/${normalizedAssetPath}`;
+  return `${backendOrigin}${normalizedSuffix}`;
+};
+
 const toLocation = (location) => {
   const lat = Number(location?.lat);
   const lng = Number(location?.lng);
@@ -93,7 +103,7 @@ const toLocation = (location) => {
   return { lat, lng };
 };
 
-const formatCurrency = (value) => `$${Number(value || 0).toFixed(2)}`;
+const formatCurrency = (value) => `₹${Number(value || 0).toFixed(2)}`;
 
 const createGeneratedSku = (itemName = "") => {
   const slug = String(itemName || "")
@@ -274,6 +284,8 @@ const StoreDashboard = () => {
   const [socketConnected, setSocketConnected] = useState(false);
   const [inventoryOpen, setInventoryOpen] = useState(false);
   const [storeLocation, setStoreLocation] = useState(null);
+  const [showDeliveredOrdersPanel, setShowDeliveredOrdersPanel] = useState(false);
+  const [selectedProofOrder, setSelectedProofOrder] = useState(null);
 
   const socketRef = useRef(null);
   const audioContextRef = useRef(null);
@@ -378,7 +390,7 @@ const StoreDashboard = () => {
 
     try {
       const notification = new Notification("New Incoming Order", {
-        body: `${orderCode} - $${amount}`,
+        body: `${orderCode} - ₹${amount}`,
       });
       setTimeout(() => notification.close(), 6000);
     } catch {
@@ -768,6 +780,20 @@ const StoreDashboard = () => {
     [fetchItems, storeId],
   );
 
+  const handleOpenProofPreview = useCallback((order) => {
+    const proofImageUrl = resolveBackendAssetUrl(order?.proofOfDeliveryImage);
+    if (!proofImageUrl) {
+      toast.info("Proof of delivery image is not available for this order.");
+      return;
+    }
+
+    setSelectedProofOrder({
+      orderId: order?.orderId || order?._id || "",
+      imageUrl: proofImageUrl,
+    });
+    setShowDeliveredOrdersPanel(false);
+  }, []);
+
   const incomingOrders = useMemo(
     () => sortByNewest(orders.filter((order) => order.status === "pending")),
     [orders],
@@ -783,6 +809,11 @@ const StoreDashboard = () => {
       sortByNewest(
         orders.filter((order) => ["shipped", "in_transit"].includes(order.status)),
       ),
+    [orders],
+  );
+
+  const deliveredOrders = useMemo(
+    () => sortByNewest(orders.filter((order) => order.status === "delivered")),
     [orders],
   );
 
@@ -908,6 +939,15 @@ const StoreDashboard = () => {
               >
                 <RefreshCw size={16} />
                 Refresh
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setShowDeliveredOrdersPanel(true)}
+                className="inline-flex h-12 items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-4 text-sm font-semibold text-emerald-700 hover:bg-emerald-100"
+              >
+                <PackageCheck size={16} />
+                Delivered Orders
               </button>
 
               <button
@@ -1168,7 +1208,122 @@ const StoreDashboard = () => {
             )}
           </ColumnShell>
         </div>
+
       </div>
+
+      <AnimatePresence>
+        {showDeliveredOrdersPanel && (
+          <MotionDiv
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[55] flex items-end bg-slate-900/60 p-3 sm:items-center sm:justify-center"
+            onClick={() => setShowDeliveredOrdersPanel(false)}
+          >
+            <MotionDiv
+              initial={{ opacity: 0, y: 80 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 80 }}
+              transition={{ type: "spring", stiffness: 240, damping: 24 }}
+              className="w-full max-w-3xl rounded-2xl bg-white p-4 shadow-2xl sm:p-5"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <div className="mb-3 flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-[0.1em] text-emerald-700">Delivered Orders</p>
+                  <p className="text-sm text-slate-600">
+                    {deliveredOrders.length} completed order{deliveredOrders.length === 1 ? "" : "s"}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowDeliveredOrdersPanel(false)}
+                  className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-slate-500 hover:bg-slate-100"
+                >
+                  <X size={16} />
+                </button>
+              </div>
+
+              {deliveredOrders.length === 0 ? (
+                <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 p-6 text-center text-sm text-slate-600">
+                  No delivered orders available yet.
+                </div>
+              ) : (
+                <div className="max-h-[68vh] space-y-3 overflow-y-auto pr-1">
+                  {deliveredOrders.map((order) => (
+                    <article key={order._id} className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <p className="text-sm font-semibold text-slate-900">{order.orderId || order._id}</p>
+                          <p className="text-xs text-slate-500">
+                            {new Date(order.deliveredAt || order.updatedAt || order.createdAt).toLocaleString()}
+                          </p>
+                        </div>
+                        <p className="text-sm font-semibold text-slate-900">{formatCurrency(order.totalAmount)}</p>
+                      </div>
+
+                      <div className="mt-3 flex items-center justify-between gap-2 text-xs text-slate-600">
+                        <span>{order.items?.length || 0} item(s)</span>
+                        <button
+                          type="button"
+                          disabled={!order?.proofOfDeliveryImage}
+                          onClick={() => handleOpenProofPreview(order)}
+                          className="inline-flex h-9 items-center justify-center rounded-lg border border-emerald-200 bg-white px-3 text-xs font-semibold text-emerald-700 hover:bg-emerald-50 disabled:cursor-not-allowed disabled:border-slate-200 disabled:text-slate-400"
+                        >
+                          Proof Of Delivery
+                        </button>
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              )}
+            </MotionDiv>
+          </MotionDiv>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {selectedProofOrder && (
+          <MotionDiv
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[60] flex items-end bg-slate-900/60 p-3 sm:items-center sm:justify-center"
+            onClick={() => setSelectedProofOrder(null)}
+          >
+            <MotionDiv
+              initial={{ opacity: 0, y: 80 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 80 }}
+              transition={{ type: "spring", stiffness: 240, damping: 24 }}
+              className="w-full max-w-3xl rounded-2xl bg-white p-4 shadow-2xl sm:p-5"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <div className="mb-3 flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-[0.1em] text-emerald-700">Delivery Proof</p>
+                  <p className="text-sm font-semibold text-slate-900">
+                    Order {selectedProofOrder.orderId}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setSelectedProofOrder(null)}
+                  className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-slate-500 hover:bg-slate-100"
+                >
+                  <X size={16} />
+                </button>
+              </div>
+
+              <img
+                src={selectedProofOrder.imageUrl}
+                alt={`Proof for order ${selectedProofOrder.orderId}`}
+                className="max-h-[70vh] w-full rounded-xl object-contain"
+              />
+            </MotionDiv>
+          </MotionDiv>
+        )}
+      </AnimatePresence>
 
       <AnimatePresence>
         {inventoryOpen && (

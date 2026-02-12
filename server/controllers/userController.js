@@ -60,3 +60,47 @@ export const loginUser = async (req, res) => {
     res.status(500).json({ message: error.message });
   }
 };
+
+export const registerUserPushToken = async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { deviceToken, platform } = req.body;
+
+    if (!userId) {
+      return res.status(400).json({ message: "userId is required" });
+    }
+
+    const normalizedDeviceToken = String(deviceToken || "").trim();
+    if (!normalizedDeviceToken) {
+      return res.status(400).json({ message: "deviceToken is required" });
+    }
+
+    const user = await userModel.findById(userId);
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    const existingTokenIndex = (user.deviceTokens || []).findIndex(
+      (entry) => String(entry.token) === normalizedDeviceToken,
+    );
+
+    if (existingTokenIndex >= 0) {
+      user.deviceTokens[existingTokenIndex].platform = platform || user.deviceTokens[existingTokenIndex].platform;
+      user.deviceTokens[existingTokenIndex].updatedAt = new Date();
+    } else {
+      user.deviceTokens.push({
+        token: normalizedDeviceToken,
+        platform: platform || "web",
+        updatedAt: new Date(),
+      });
+    }
+
+    await user.save();
+
+    return res.status(200).json({
+      message: "Push token registered successfully",
+    });
+  } catch (error) {
+    return res.status(500).json({ message: error.message });
+  }
+};

@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import axios from "axios";
 import { toast } from "react-toastify";
 import { AppContext } from "../../context/appContext";
+import DeliveryLocationPicker from "../../components/DeliveryLocationPicker";
 
 const StoreLogin = () => {
   const navigate = useNavigate();
@@ -15,6 +16,7 @@ const StoreLogin = () => {
   const [phone, setPhone] = useState("");
   const [address, setAddress] = useState("");
   const [city, setCity] = useState("");
+  const [storeLocation, setStoreLocation] = useState(null);
 
   const resetForm = () => {
     setStoreName("");
@@ -23,6 +25,7 @@ const StoreLogin = () => {
     setPhone("");
     setAddress("");
     setCity("");
+    setStoreLocation(null);
   };
 
   const onSubmitHandler = async (e) => {
@@ -49,6 +52,12 @@ const StoreLogin = () => {
           phone,
           address,
           city,
+          location: storeLocation
+            ? {
+                lat: Number(storeLocation.lat),
+                lng: Number(storeLocation.lng),
+              }
+            : undefined,
         });
 
         toast.success("Registration successful. Please login.");
@@ -97,6 +106,17 @@ const StoreLogin = () => {
               onChange={(e) => setAddress(e.target.value)}
               required
             />
+
+            <div className="mb-2 sm:mb-3">
+              <DeliveryLocationPicker
+                value={storeLocation}
+                onChange={setStoreLocation}
+                onAddressResolved={(resolvedAddress) => {
+                  if (!resolvedAddress) return;
+                  setAddress((previousAddress) => previousAddress || resolvedAddress);
+                }}
+              />
+            </div>
 
             <input
               type="text"

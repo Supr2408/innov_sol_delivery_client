@@ -7,6 +7,7 @@ import {
   CheckCircle2,
   CircleDollarSign,
   Gauge,
+  ImagePlus,
   Navigation,
   Phone,
   Power,
@@ -83,7 +84,7 @@ const toLocation = (location) => {
   return { lat, lng };
 };
 
-const formatMoney = (value) => `$${Number(value || 0).toFixed(2)}`;
+const formatMoney = (value) => `₹${Number(value || 0).toFixed(2)}`;
 
 const isSameDate = (dateA, dateB) => {
   if (!dateA || !dateB) return false;
@@ -239,6 +240,8 @@ const PartnerDashboard = () => {
 
   const [otpModalOrder, setOtpModalOrder] = useState(null);
   const [otpValue, setOtpValue] = useState("");
+  const [proofImageFile, setProofImageFile] = useState(null);
+  const [proofImagePreviewUrl, setProofImagePreviewUrl] = useState("");
 
   const [jobOfferedCount, setJobOfferedCount] = useState(0);
   const [jobAcceptedCount, setJobAcceptedCount] = useState(0);
@@ -738,6 +741,42 @@ const PartnerDashboard = () => {
     }
   }, [fetchDeliveries]);
 
+  const clearProofImage = useCallback(() => {
+    setProofImageFile(null);
+    setProofImagePreviewUrl((previousPreviewUrl) => {
+      if (previousPreviewUrl) {
+        URL.revokeObjectURL(previousPreviewUrl);
+      }
+      return "";
+    });
+  }, []);
+
+  const handleProofImageSelection = useCallback((event) => {
+    const selectedFile = event.target.files?.[0];
+    if (!selectedFile) return;
+
+    if (!String(selectedFile.type || "").startsWith("image/")) {
+      toast.error("Please select an image file");
+      event.target.value = "";
+      return;
+    }
+
+    setProofImageFile(selectedFile);
+    setProofImagePreviewUrl((previousPreviewUrl) => {
+      if (previousPreviewUrl) {
+        URL.revokeObjectURL(previousPreviewUrl);
+      }
+      return URL.createObjectURL(selectedFile);
+    });
+  }, []);
+
+  useEffect(
+    () => () => {
+      clearProofImage();
+    },
+    [clearProofImage],
+  );
+
   const verifyDeliveryOtp = useCallback(
     async (order, otpCode) => {
       if (!order?._id || !partnerId) return;
@@ -748,16 +787,28 @@ const PartnerDashboard = () => {
         return;
       }
 
+      if (!proofImageFile) {
+        toast.error("Please capture or select a proof image before completing delivery");
+        return;
+      }
+
       try {
         setVerifyActionOrderId(order._id);
-        await axios.post(`/orders/${order._id}/verify-complete`, {
-          partnerId,
-          deliveryOTP: normalizedOtpCode,
+        const formData = new FormData();
+        formData.append("partnerId", String(partnerId));
+        formData.append("deliveryOTP", normalizedOtpCode);
+        formData.append("proofOfDeliveryImage", proofImageFile);
+
+        await axios.post(`/orders/${order._id}/verify-complete`, formData, {
+          headers: {
+            "Content-Type": "multipart/form-data",
+          },
         });
 
         toast.success("Delivery verified and completed");
         setOtpModalOrder(null);
         setOtpValue("");
+        clearProofImage();
         await fetchDeliveries();
       } catch (error) {
         toast.error(error?.response?.data?.message || "OTP verification failed");
@@ -765,7 +816,7 @@ const PartnerDashboard = () => {
         setVerifyActionOrderId("");
       }
     },
-    [fetchDeliveries, partnerId],
+    [clearProofImage, fetchDeliveries, partnerId, proofImageFile],
   );
 
   const openDirections = useCallback((provider = "google") => {
@@ -965,6 +1016,7 @@ const PartnerDashboard = () => {
                     onClick={() => {
                       setOtpModalOrder(activeOrder);
                       setOtpValue("");
+                      clearProofImage();
                     }}
                     className="inline-flex h-12 items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 text-sm font-semibold text-white transition hover:bg-emerald-700"
                   >
@@ -1085,6 +1137,7 @@ const PartnerDashboard = () => {
                         onClick={() => {
                           setOtpModalOrder(order);
                           setOtpValue("");
+                          clearProofImage();
                         }}
                         className="mt-3 inline-flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-emerald-600 px-3 text-sm font-semibold text-white transition hover:bg-emerald-700"
                       >
@@ -1174,6 +1227,7 @@ const PartnerDashboard = () => {
                   onClick={() => {
                     setOtpModalOrder(null);
                     setOtpValue("");
+                    clearProofImage();
                   }}
                   className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-slate-500 hover:bg-slate-100"
                 >
@@ -1219,10 +1273,38 @@ const PartnerDashboard = () => {
                 ))}
               </div>
 
+              <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
+                <label className="mb-2 inline-flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.08em] text-slate-600">
+                  <ImagePlus size={13} />
+                  Proof Of Delivery Photo
+                </label>
+
+                <input
+                  type="file"
+                  accept="image/*"
+                  capture="environment"
+                  onChange={handleProofImageSelection}
+                  disabled={verifyActionOrderId === otpModalOrder._id}
+                  className="block w-full text-xs text-slate-700 file:mr-3 file:rounded-lg file:border file:border-slate-300 file:bg-white file:px-3 file:py-2 file:text-xs file:font-semibold file:text-slate-700"
+                />
+
+                {proofImagePreviewUrl ? (
+                  <img
+                    src={proofImagePreviewUrl}
+                    alt="Proof preview"
+                    className="mt-3 h-44 w-full rounded-lg object-cover"
+                  />
+                ) : (
+                  <p className="mt-2 text-xs text-slate-500">
+                    Capture a clear photo before completing delivery.
+                  </p>
+                )}
+              </div>
+
               <button
                 type="button"
                 onClick={() => verifyDeliveryOtp(otpModalOrder, otpValue)}
-                disabled={verifyActionOrderId === otpModalOrder._id}
+                disabled={verifyActionOrderId === otpModalOrder._id || !proofImageFile}
                 className="mt-3 inline-flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 text-sm font-semibold text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 <ShieldCheck size={16} />

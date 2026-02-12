@@ -33,6 +33,18 @@ const storeSchema = new mongoose.Schema(
       required: true,
     },
 
+    location: {
+      type: {
+        type: String,
+        enum: ["Point"],
+        default: "Point",
+      },
+      coordinates: {
+        type: [Number],
+        default: undefined,
+      },
+    },
+
     role: {
       type: String,
       default: "store",
@@ -40,6 +52,8 @@ const storeSchema = new mongoose.Schema(
   },
   { timestamps: true }
 );
+
+storeSchema.index({ location: "2dsphere" });
 
 const storeModel = mongoose.models.store || mongoose.model("store", storeSchema);
 

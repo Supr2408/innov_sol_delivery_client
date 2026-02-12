@@ -1,5 +1,6 @@
 import { Server } from "socket.io";
 import orderModel from "./models/orderModel.js";
+import partnerModel from "./models/partnerModel.js";
 
 let ioInstance;
 let heartbeatSweepTimer;
@@ -185,6 +186,14 @@ export const initSocket = (httpServer) => {
 
         socket.data.partnerId = String(partnerId);
         await touchPartnerHeartbeat(socket.id, partnerId);
+
+        await partnerModel.findByIdAndUpdate(partnerId, {
+          location: {
+            type: "Point",
+            coordinates: [Number(lng), Number(lat)],
+            updatedAt: new Date(),
+          },
+        });
 
         const order = await orderModel
           .findById(orderId)

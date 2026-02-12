@@ -43,6 +43,58 @@ const TRACKING_STEPS = [
   { id: "in_transit", label: "In Transit" },
 ];
 
+const BASE_DELIVERY_FEE = Number(import.meta.env.VITE_BASE_DELIVERY_FEE || 2.49);
+const DELIVERY_FEE_PER_KM = Number(import.meta.env.VITE_DELIVERY_FEE_PER_KM || 0.75);
+const PLATFORM_FEE_RATE = Number(import.meta.env.VITE_PLATFORM_FEE_RATE || 0.05);
+
+const roundCurrency = (value) => Math.round((Number(value) || 0) * 100) / 100;
+
+const calculateDistanceKm = (startPoint, endPoint) => {
+  if (!startPoint || !endPoint) return 0;
+
+  const earthRadiusKm = 6371;
+  const radians = Math.PI / 180;
+  const latitudeDelta = (endPoint.lat - startPoint.lat) * radians;
+  const longitudeDelta = (endPoint.lng - startPoint.lng) * radians;
+  const startLatitudeInRadians = startPoint.lat * radians;
+  const endLatitudeInRadians = endPoint.lat * radians;
+  const haversineComponent =
+    Math.sin(latitudeDelta / 2) ** 2 +
+    Math.cos(startLatitudeInRadians) *
+      Math.cos(endLatitudeInRadians) *
+      Math.sin(longitudeDelta / 2) ** 2;
+
+  return earthRadiusKm * 2 * Math.atan2(Math.sqrt(haversineComponent), Math.sqrt(1 - haversineComponent));
+};
+
+const resolveStoreLocation = (store) => {
+  const coordinates = Array.isArray(store?.location?.coordinates) ? store.location.coordinates : [];
+  if (coordinates.length !== 2) return null;
+
+  return {
+    lat: Number(coordinates[1]),
+    lng: Number(coordinates[0]),
+  };
+};
+
+const estimateDeliveryFee = (distanceKm, hasDistanceInputs) =>
+  roundCurrency(BASE_DELIVERY_FEE + (hasDistanceInputs ? Math.max(0, distanceKm) * DELIVERY_FEE_PER_KM : 0));
+
+const buildReviewKey = (orderId, targetId, targetType) =>
+  `${String(orderId || "")}:${String(targetId || "")}:${String(targetType || "")}`;
+
+const resolveOrderSubtotal = (order) => {
+  const explicitSubtotal = Number(order?.baseSubtotal);
+  if (Number.isFinite(explicitSubtotal) && explicitSubtotal > 0) {
+    return explicitSubtotal;
+  }
+
+  const total = Number(order?.totalAmount || 0);
+  const deliveryFee = Number(order?.deliveryFee || 0);
+  const platformFee = Number(order?.platformFee || 0);
+  return roundCurrency(Math.max(0, total - deliveryFee - platformFee));
+};
+
 const loadSocketClient = () =>
   new Promise((resolve, reject) => {
     if (window.io) {
@@ -196,10 +248,18 @@ const UserDashboard = () => {
   const [cart, setCart] = useState([]);
   const [cartOpen, setCartOpen] = useState(false);
   const [placingOrder, setPlacingOrder] = useState(false);
-  const [checkoutForm, setCheckoutForm] = useState({
-    deliveryAddress: "",
+  const [checkoutForm, setCheckoutForm] = useState(() => ({
+    deliveryAddress: String(localStorage.getItem("userDeliveryAddress") || "").trim(),
     clientPhone: "",
-  });
+  }));
+  const [reviews, setReviews] = useState([]);
+  const [reviewModalState, setReviewModalState] = useState(null);
+  const [reviewRating, setReviewRating] = useState(5);
+  const [reviewComment, setReviewComment] = useState("");
+  const [submittingReview, setSubmittingReview] = useState(false);
+  const [reviewPromptPaused, setReviewPromptPaused] = useState(false);
+  const [dismissedReviewKeys, setDismissedReviewKeys] = useState(() => new Set());
+  const [dismissedReviewOrderIds, setDismissedReviewOrderIds] = useState(() => new Set());
   const [deliveryLocation, setDeliveryLocation] = useState(() => {
     const savedLocation = localStorage.getItem("userDeliveryLocation");
     if (!savedLocation) return null;
@@ -217,6 +277,10 @@ const UserDashboard = () => {
     }
 
     return null;
+  });
+  const [showLocationPicker, setShowLocationPicker] = useState(() => {
+    const savedLocation = localStorage.getItem("userDeliveryLocation");
+    return !savedLocation;
   });
 
   useEffect(() => {
@@ -252,6 +316,21 @@ const UserDashboard = () => {
     }
 
     localStorage.removeItem("userDeliveryLocation");
+  }, [deliveryLocation]);
+
+  useEffect(() => {
+    const normalizedAddress = String(checkoutForm.deliveryAddress || "").trim();
+    if (normalizedAddress) {
+      localStorage.setItem("userDeliveryAddress", normalizedAddress);
+      return;
+    }
+    localStorage.removeItem("userDeliveryAddress");
+  }, [checkoutForm.deliveryAddress]);
+
+  useEffect(() => {
+    if (!deliveryLocation) {
+      setShowLocationPicker(true);
+    }
   }, [deliveryLocation]);
 
   useEffect(() => {
@@ -314,6 +393,7 @@ const UserDashboard = () => {
     if (!user?.id) {
       setOrders([]);
       setTracking([]);
+      setReviews([]);
       setOrdersLoading(false);
       return;
     }
@@ -324,9 +404,10 @@ const UserDashboard = () => {
       setOrdersLoading(true);
 
       try {
-        const [ordersResult, trackingResult] = await Promise.allSettled([
+        const [ordersResult, trackingResult, reviewsResult] = await Promise.allSettled([
           axios.get(`/orders/user/${user.id}`),
           axios.get(`/orders/tracking/${user.id}`),
+          axios.get(`/reviews/user/${user.id}`),
         ]);
 
         if (!isMounted) return;
@@ -343,6 +424,12 @@ const UserDashboard = () => {
         } else {
           setTracking([]);
         }
+
+        if (reviewsResult.status === "fulfilled") {
+          setReviews(reviewsResult.value.data?.reviews || []);
+        } else {
+          setReviews([]);
+        }
       } finally {
         if (isMounted) {
           setOrdersLoading(false);
@@ -355,6 +442,22 @@ const UserDashboard = () => {
     return () => {
       isMounted = false;
     };
+  }, [user?.id]);
+
+  useEffect(() => {
+    if (!user?.id) return;
+
+    const existingDeviceToken = String(localStorage.getItem("fcmDeviceToken") || "").trim();
+    if (!existingDeviceToken) return;
+
+    axios
+      .post(`/users/${user.id}/push-token`, {
+        deviceToken: existingDeviceToken,
+        platform: "web",
+      })
+      .catch(() => {
+        // Push token registration is best-effort.
+      });
   }, [user?.id]);
 
   useEffect(() => {
@@ -431,6 +534,58 @@ const UserDashboard = () => {
       }
     };
   }, [token, user?.id]);
+
+  useEffect(() => {
+    if (reviewPromptPaused || reviewModalState || !orders.length) return;
+
+    const reviewedKeys = new Set(
+      (reviews || []).map((review) =>
+        buildReviewKey(review.orderId, review.targetId, review.targetType),
+      ),
+    );
+
+    for (const order of orders) {
+      if (order.status !== "delivered") continue;
+      if (dismissedReviewOrderIds.has(String(order._id))) continue;
+
+      const storeId = typeof order.storeId === "object" ? order.storeId?._id : order.storeId;
+      const partnerId = typeof order.partnerId === "object" ? order.partnerId?._id : order.partnerId;
+
+      const reviewTargets = [
+        {
+          targetType: "store",
+          targetId: storeId,
+          targetName: order.storeId?.storeName || "Store",
+        },
+      ];
+
+      if (partnerId) {
+        reviewTargets.push({
+          targetType: "partner",
+          targetId: partnerId,
+          targetName: order.partnerId?.name || "Partner",
+        });
+      }
+
+      for (const target of reviewTargets) {
+        const reviewKey = buildReviewKey(order._id, target.targetId, target.targetType);
+        if (!target.targetId || reviewedKeys.has(reviewKey) || dismissedReviewKeys.has(reviewKey)) {
+          continue;
+        }
+
+        setReviewRating(5);
+        setReviewComment("");
+        setReviewModalState({
+          orderId: order._id,
+          orderLabel: order.orderId,
+          targetId: String(target.targetId),
+          targetType: target.targetType,
+          targetName: target.targetName,
+        });
+        return;
+      }
+    }
+  }, [dismissedReviewKeys, dismissedReviewOrderIds, orders, reviewModalState, reviewPromptPaused, reviews]);
 
   const shouldFetchDiscoveryMatches =
     selectedCategory !== "All" || debouncedSearchQuery.length > 0;
@@ -617,6 +772,44 @@ const UserDashboard = () => {
     [cart],
   );
 
+  const cartPricingBreakdown = useMemo(() => {
+    const subtotal = roundCurrency(cartTotalAmount);
+    const platformFee = roundCurrency(subtotal * PLATFORM_FEE_RATE);
+
+    const groupedByStore = cart.reduce((accumulator, cartItem) => {
+      const storeId = String(cartItem.storeId || "");
+      if (!storeId) return accumulator;
+      if (!accumulator[storeId]) {
+        accumulator[storeId] = 0;
+      }
+      accumulator[storeId] += Number(cartItem.price || 0) * Number(cartItem.quantity || 0);
+      return accumulator;
+    }, {});
+
+    const deliveryFee = roundCurrency(
+      Object.keys(groupedByStore).reduce((sum, storeId) => {
+        const store = stores.find((entry) => String(entry._id) === String(storeId));
+        const storeLocation = resolveStoreLocation(store);
+        const hasDistanceInputs = Boolean(storeLocation && deliveryLocation);
+        const distanceKm = hasDistanceInputs ? calculateDistanceKm(storeLocation, deliveryLocation) : 0;
+        return sum + estimateDeliveryFee(distanceKm, hasDistanceInputs);
+      }, 0),
+    );
+
+    const total = roundCurrency(subtotal + platformFee + deliveryFee);
+
+    return {
+      subtotal,
+      platformFee,
+      deliveryFee,
+      total,
+    };
+  }, [cart, cartTotalAmount, deliveryLocation, stores]);
+
+  const hasSavedDeliveryLocation =
+    Number.isFinite(Number(deliveryLocation?.lat)) &&
+    Number.isFinite(Number(deliveryLocation?.lng));
+
   const addItemToCart = (item, fallbackStoreId = "", fallbackStoreName = "Store") => {
     const normalizedStoreId = resolveStoreIdFromItem(item) || String(fallbackStoreId || "");
     if (!normalizedStoreId) {
@@ -770,7 +963,7 @@ const UserDashboard = () => {
 
       setCart([]);
       setCartOpen(false);
-      setDeliveryLocation(null);
+      setShowLocationPicker(false);
       setActiveTab("home");
       toast.success("Order placed successfully");
     } catch (error) {
@@ -795,6 +988,58 @@ const UserDashboard = () => {
     } finally {
       setSelectedStoreItemsLoading(false);
     }
+  };
+
+  const submitReview = async () => {
+    if (!reviewModalState || !user?.id) return;
+
+    try {
+      setSubmittingReview(true);
+      const { data } = await axios.post("/reviews", {
+        orderId: reviewModalState.orderId,
+        clientId: user.id,
+        targetId: reviewModalState.targetId,
+        targetType: reviewModalState.targetType,
+        rating: reviewRating,
+        comment: reviewComment.trim(),
+      });
+
+      if (data?.review) {
+        setReviews((previousReviews) => [data.review, ...previousReviews]);
+      }
+
+      setDismissedReviewOrderIds((previousOrderIds) =>
+        new Set([...previousOrderIds, String(reviewModalState.orderId)]),
+      );
+      setReviewPromptPaused(true);
+      setReviewModalState(null);
+      setReviewComment("");
+      setReviewRating(5);
+      toast.success("Thanks for your feedback");
+    } catch (error) {
+      toast.error(error?.response?.data?.message || "Unable to submit review");
+    } finally {
+      setSubmittingReview(false);
+    }
+  };
+
+  const dismissReviewModal = () => {
+    if (reviewModalState) {
+      const reviewKey = buildReviewKey(
+        reviewModalState.orderId,
+        reviewModalState.targetId,
+        reviewModalState.targetType,
+      );
+      setDismissedReviewKeys((previousKeys) => new Set([...previousKeys, reviewKey]));
+      setDismissedReviewOrderIds((previousOrderIds) =>
+        new Set([...previousOrderIds, String(reviewModalState.orderId)]),
+      );
+    }
+
+    setReviewPromptPaused(true);
+    setReviewModalState(null);
+    setReviewComment("");
+    setReviewRating(5);
   };
 
   const activeOrder = useMemo(() => {
@@ -910,7 +1155,7 @@ const UserDashboard = () => {
                           Order {activeOrder.orderId}
                         </p>
                         <p className="mt-1 text-sm text-slate-600">
-                          {activeOrder.items?.length || 0} item(s) • ${Number(
+                          {activeOrder.items?.length || 0} item(s) • ₹{Number(
                             activeOrder.totalAmount || 0,
                           ).toFixed(2)}
                         </p>
@@ -918,6 +1163,33 @@ const UserDashboard = () => {
                       <div className="inline-flex items-center gap-2 rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-700">
                         <Truck size={14} />
                         {ORDER_STATUS_LABELS[activeOrder.status] || "In Progress"}
+                      </div>
+                    </div>
+
+                    <div className="grid gap-2 rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs text-slate-700 sm:grid-cols-4">
+                      <div className="flex items-center justify-between sm:block">
+                        <span className="text-slate-500">Subtotal</span>
+                        <p className="font-semibold text-slate-900">
+                          ₹{resolveOrderSubtotal(activeOrder).toFixed(2)}
+                        </p>
+                      </div>
+                      <div className="flex items-center justify-between sm:block">
+                        <span className="text-slate-500">Delivery Fee</span>
+                        <p className="font-semibold text-slate-900">
+                          ₹{Number(activeOrder.deliveryFee || 0).toFixed(2)}
+                        </p>
+                      </div>
+                      <div className="flex items-center justify-between sm:block">
+                        <span className="text-slate-500">Platform Fee</span>
+                        <p className="font-semibold text-slate-900">
+                          ₹{Number(activeOrder.platformFee || 0).toFixed(2)}
+                        </p>
+                      </div>
+                      <div className="flex items-center justify-between sm:block">
+                        <span className="text-slate-500">Total</span>
+                        <p className="font-semibold text-slate-900">
+                          ₹{Number(activeOrder.totalAmount || 0).toFixed(2)}
+                        </p>
                       </div>
                     </div>
 
@@ -1091,7 +1363,7 @@ const UserDashboard = () => {
                                 {item.category || "General"}
                               </span>
                               <span className="text-sm font-semibold text-slate-800">
-                                ${Number(item.price || 0).toFixed(2)}
+                                ₹{Number(item.price || 0).toFixed(2)}
                               </span>
                             </div>
                             <button
@@ -1274,7 +1546,7 @@ const UserDashboard = () => {
                                 {item.category || "General"}
                               </span>
                               <span className="text-sm font-semibold text-emerald-700">
-                                ${Number(item.price || 0).toFixed(2)}
+                                ₹{Number(item.price || 0).toFixed(2)}
                               </span>
                             </div>
                             <button
@@ -1360,14 +1632,10 @@ const UserDashboard = () => {
                       </span>
                     </div>
 
-                    <div className="mt-4 grid gap-3 text-sm text-slate-700 sm:grid-cols-3">
+                    <div className="mt-4 grid gap-3 text-sm text-slate-700 sm:grid-cols-2">
                       <div className="rounded-xl bg-slate-50 p-3">
                         <p className="text-xs text-slate-500">Items</p>
                         <p className="mt-1 font-semibold">{order.items?.length || 0}</p>
-                      </div>
-                      <div className="rounded-xl bg-slate-50 p-3">
-                        <p className="text-xs text-slate-500">Total</p>
-                        <p className="mt-1 font-semibold">${Number(order.totalAmount || 0).toFixed(2)}</p>
                       </div>
                       <div className="rounded-xl bg-slate-50 p-3">
                         <p className="text-xs text-slate-500">ETA</p>
@@ -1381,6 +1649,34 @@ const UserDashboard = () => {
                         </p>
                       </div>
                     </div>
+
+                    <div className="mt-3 rounded-xl border border-slate-200 bg-white p-3 text-xs text-slate-600">
+                      <div className="flex items-center justify-between py-1">
+                        <span>Subtotal</span>
+                        <span className="font-semibold text-slate-900">
+                          ₹{resolveOrderSubtotal(order).toFixed(2)}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between py-1">
+                        <span>Delivery Fee</span>
+                        <span className="font-semibold text-slate-900">
+                          ₹{Number(order.deliveryFee || 0).toFixed(2)}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between py-1">
+                        <span>Platform Fee</span>
+                        <span className="font-semibold text-slate-900">
+                          ₹{Number(order.platformFee || 0).toFixed(2)}
+                        </span>
+                      </div>
+                      <div className="mt-1 flex items-center justify-between border-t border-slate-200 pt-2 text-sm">
+                        <span className="font-semibold text-slate-700">Total</span>
+                        <span className="font-semibold text-slate-900">
+                          ₹{Number(order.totalAmount || 0).toFixed(2)}
+                        </span>
+                      </div>
+                    </div>
+
                   </article>
                 ))}
               </div>
@@ -1446,7 +1742,7 @@ const UserDashboard = () => {
           >
             <ShoppingCart size={16} />
             {cartItemsCount} item{cartItemsCount === 1 ? "" : "s"}
-            <span className="rounded bg-white/20 px-2 py-0.5">${cartTotalAmount.toFixed(2)}</span>
+            <span className="rounded bg-white/20 px-2 py-0.5">₹{cartPricingBreakdown.total.toFixed(2)}</span>
           </button>
         )}
       </div>
@@ -1495,7 +1791,7 @@ const UserDashboard = () => {
                             {cartItem.storeName || storeNameById.get(String(cartItem.storeId)) || "Store"}
                           </p>
                           <p className="text-xs font-medium text-emerald-700">
-                            ${Number(cartItem.price || 0).toFixed(2)}
+                            ₹{Number(cartItem.price || 0).toFixed(2)}
                           </p>
                         </div>
                         <button
@@ -1535,16 +1831,57 @@ const UserDashboard = () => {
                 </div>
 
                 <div className="mt-5 space-y-3 border-t border-slate-200 pt-4">
-                  <DeliveryLocationPicker
-                    value={deliveryLocation}
-                    onChange={setDeliveryLocation}
-                    onAddressResolved={(resolvedAddress) =>
-                      setCheckoutForm((previousForm) => ({
-                        ...previousForm,
-                        deliveryAddress: resolvedAddress || previousForm.deliveryAddress,
-                      }))
-                    }
-                  />
+                  <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                    <div className="mb-2 flex items-center justify-between">
+                      <span className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">
+                        Delivery Location
+                      </span>
+                      {hasSavedDeliveryLocation && !showLocationPicker ? (
+                        <button
+                          type="button"
+                          onClick={() => setShowLocationPicker(true)}
+                          className="text-xs font-semibold text-emerald-700 hover:text-emerald-800"
+                        >
+                          Change
+                        </button>
+                      ) : null}
+                    </div>
+
+                    {hasSavedDeliveryLocation && !showLocationPicker ? (
+                      <div className="flex items-center justify-between gap-2 text-xs text-slate-600">
+                        <div>
+                          <p className="font-medium text-slate-800">Saved location in use</p>
+                          <p>
+                            {Number(deliveryLocation.lat).toFixed(5)}, {Number(deliveryLocation.lng).toFixed(5)}
+                          </p>
+                        </div>
+                        <MapPinned size={14} className="text-emerald-600" />
+                      </div>
+                    ) : (
+                      <div className="space-y-2">
+                        <DeliveryLocationPicker
+                          value={deliveryLocation}
+                          onChange={setDeliveryLocation}
+                          onAddressResolved={(resolvedAddress) =>
+                            setCheckoutForm((previousForm) => ({
+                              ...previousForm,
+                              deliveryAddress: resolvedAddress || previousForm.deliveryAddress,
+                            }))
+                          }
+                        />
+
+                        {hasSavedDeliveryLocation ? (
+                          <button
+                            type="button"
+                            onClick={() => setShowLocationPicker(false)}
+                            className="inline-flex h-9 items-center justify-center rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 hover:bg-slate-100"
+                          >
+                            Use Saved Location
+                          </button>
+                        ) : null}
+                      </div>
+                    )}
+                  </div>
 
                   <label className="block">
                     <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">
@@ -1582,11 +1919,31 @@ const UserDashboard = () => {
                     />
                   </label>
 
-                  <div className="flex items-center justify-between rounded-lg bg-slate-50 px-3 py-2">
-                    <span className="text-sm font-medium text-slate-600">Total</span>
-                    <span className="text-lg font-semibold text-slate-900">
-                      ${cartTotalAmount.toFixed(2)}
-                    </span>
+                  <div className="space-y-1 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-600">
+                    <div className="flex items-center justify-between">
+                      <span>Subtotal</span>
+                      <span className="font-semibold text-slate-900">
+                        ₹{cartPricingBreakdown.subtotal.toFixed(2)}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span>Delivery Fee</span>
+                      <span className="font-semibold text-slate-900">
+                        ₹{cartPricingBreakdown.deliveryFee.toFixed(2)}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span>Platform Fee</span>
+                      <span className="font-semibold text-slate-900">
+                        ₹{cartPricingBreakdown.platformFee.toFixed(2)}
+                      </span>
+                    </div>
+                    <div className="mt-1 flex items-center justify-between border-t border-slate-200 pt-2">
+                      <span className="font-semibold text-slate-700">Total</span>
+                      <span className="text-base font-semibold text-slate-900">
+                        ₹{cartPricingBreakdown.total.toFixed(2)}
+                      </span>
+                    </div>
                   </div>
 
                   <button
@@ -1605,6 +1962,81 @@ const UserDashboard = () => {
       )}
 
       <UserBottomNav activeTab={activeTab} onTabChange={setActiveTab} />
+
+      {reviewModalState && (
+        <div className="fixed inset-0 z-[60] flex items-end bg-slate-900/50 p-4 sm:items-center sm:justify-center">
+          <div className="w-full rounded-2xl bg-white p-4 shadow-2xl sm:max-w-md sm:p-5">
+            <div className="mb-3 flex items-start justify-between">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.1em] text-emerald-700">
+                  Rate Delivery
+                </p>
+                <p className="mt-1 text-sm font-semibold text-slate-900">
+                  Order {reviewModalState.orderLabel}
+                </p>
+                <p className="text-xs text-slate-600">
+                  Share feedback for {reviewModalState.targetType}: {reviewModalState.targetName}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={dismissReviewModal}
+                className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-slate-500 hover:bg-slate-100"
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            <div className="mb-3 flex items-center gap-1">
+              {Array.from({ length: 5 }).map((_, index) => {
+                const ratingValue = index + 1;
+                const selected = ratingValue <= reviewRating;
+
+                return (
+                  <button
+                    key={`review-star-${ratingValue}`}
+                    type="button"
+                    onClick={() => setReviewRating(ratingValue)}
+                    className={`inline-flex h-9 w-9 items-center justify-center rounded-lg border ${
+                      selected
+                        ? "border-amber-300 bg-amber-50 text-amber-600"
+                        : "border-slate-200 bg-white text-slate-400"
+                    }`}
+                  >
+                    <Star size={16} className={selected ? "fill-current" : ""} />
+                  </button>
+                );
+              })}
+            </div>
+
+            <textarea
+              value={reviewComment}
+              onChange={(event) => setReviewComment(event.target.value)}
+              placeholder="Tell us about your delivery experience"
+              className="h-24 w-full rounded-lg border border-slate-200 p-3 text-sm outline-none focus:border-emerald-400"
+            />
+
+            <div className="mt-3 grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={dismissReviewModal}
+                disabled={submittingReview}
+                className="inline-flex h-11 items-center justify-center rounded-lg border border-slate-200 bg-slate-50 text-sm font-semibold text-slate-700 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                Later
+              </button>
+              <button
+                type="button"
+                onClick={submitReview}
+                disabled={submittingReview}
+                className="inline-flex h-11 items-center justify-center rounded-lg bg-emerald-600 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {submittingReview ? "Submitting..." : "Submit Review"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {showFilterModal && (
         <div className="fixed inset-0 z-50 flex items-end bg-slate-900/40 p-4 sm:items-center sm:justify-center">
